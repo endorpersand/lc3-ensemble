@@ -5,4 +5,4 @@
     - Other: `source .env/bin/activate`
 3. Install maturin through pip
 4. Run `maturin develop`
-5. Import the `"ensemble_test"` module while inside the virtual environment
+5. Import the `ensemble_test` module while inside the virtual environment
