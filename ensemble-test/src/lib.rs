@@ -1,24 +1,27 @@
-use lc3_ensemble::{sim::mem::MemAccessCtx, asm::assemble_debug, ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7}, parse::parse_ast};
-use pyo3::{exceptions::PyIndexError, prelude::*};
-use std::path::Path;
+use lc3_ensemble::asm::assemble_debug;
+use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
+use lc3_ensemble::parse::parse_ast;
+use lc3_ensemble::sim::Simulator;
+use lc3_ensemble::sim::mem::MemAccessCtx;
+use pyo3::prelude::*;
+use pyo3::exceptions::PyIndexError;
 
-#[pyclass]
-struct Simulator {
-    sim: lc3_ensemble::sim::Simulator,
+#[pyclass(name="Simulator")]
+struct PySimulator {
+    sim: Simulator,
 }
 
 #[pymethods]
-impl Simulator {
+impl PySimulator {
     #[new]
     fn constructor() -> Self {
-        Simulator { sim: lc3_ensemble::sim::Simulator::new() }
+        PySimulator { sim: Simulator::new() }
     }
 
-    fn init(&mut self, file: String) -> PyResult<()> {
-        self.sim = lc3_ensemble::sim::Simulator::new();
+    fn init(&mut self, src_fp: &str) -> PyResult<()> {
+        self.sim = Simulator::new();
         
-        let source_path = Path::new(&file);
-        let src = std::fs::read_to_string(source_path)?;
+        let src = std::fs::read_to_string(src_fp)?;
         let ast = parse_ast(&src).unwrap();
         let obj = assemble_debug(ast, &src).unwrap();
 
@@ -53,7 +56,7 @@ impl Simulator {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn ensemble_test(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<Simulator>()?;
+    m.add_class::<PySimulator>()?;
     //m.add_function(wrap_pyfunction!(load_source, m)?)?;
     Ok(())
 }
