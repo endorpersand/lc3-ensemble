@@ -4,7 +4,7 @@ use lc3_ensemble::asm::assemble_debug;
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
-use lc3_ensemble::sim::mem::WordCreateStrategy;
+use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
 use pyo3::prelude::*;
 use pyo3::exceptions::PyIndexError;
 
@@ -67,18 +67,27 @@ impl PySimulator {
         todo!()
     }
 
-    /// @see lc3_run (ported from pylc3, may need to revise)
+    /// Runs the simulator until the program halts or `n` steps have been executed.
+    /// 
+    /// This was originally `LC3State::run` in complx's pylc3.
     fn run(&mut self, n: Option<usize>) -> PyResult<()> {
-        todo!()
+        // TODO, use n to keep track of number of steps.
+        // TODO: don't panic here
+        self.sim.run().unwrap();
+        Ok(())
     }
 
-    /// @see lc3_step (ported from pylc3, may need to revise)
-    fn step(&mut self, ) -> PyResult<()> {
-        todo!()
+    /// Performs one step in.
+    /// 
+    /// This was originally `LC3State::step` in complx's pylc3.
+    fn step(&mut self) -> PyResult<()> {
+        // TODO: don't panic here
+        self.sim.step_in().unwrap();
+        Ok(())
     }
 
     /// @see lc3_back (ported from pylc3, may need to revise)
-    fn back(&mut self, ) -> PyResult<()> {
+    fn back(&mut self) -> PyResult<()> {
         todo!()
     }
 
@@ -87,9 +96,13 @@ impl PySimulator {
         todo!()
     }
 
-    /// @see lc3_finish (ported from pylc3, may need to revise)
-    fn finish(&mut self, ) -> PyResult<()> {
-        todo!()
+    /// Performs one step out.
+    /// 
+    /// This was originally `LC3State::finish` in complx's pylc3.
+    fn finish(&mut self) -> PyResult<()> {
+        // TODO: don't panic here
+        self.sim.step_out().unwrap();
+        Ok(())
     }
 
     /// @see lc3_next_line (ported from pylc3, may need to revise)
@@ -103,14 +116,30 @@ impl PySimulator {
         todo!()
     }
     
-    /// @see lc3_mem_read (ported from pylc3, may need to revise)
+    /// Reads the value at the given address in memory with privileged access.
+    /// 
+    /// Note that this will trigger IO updates (unlike [`PySimulator::get_mem`]) and should **not** be used
+    /// for querying the state of memory. If desired, use the other function instead.
+    /// 
+    /// This was originally `LC3State::memory_read` in complx's pylc3.
     fn read_mem(&mut self, addr: u16) -> PyResult<u16> {
-        todo!()
+        // TODO: strict?
+        // TODO: don't panic here
+        Ok(self.sim.mem.read(addr, MemAccessCtx { privileged: true, strict: false }).unwrap().get())
     }
     
-    /// @see lc3_mem_write (ported from pylc3, may need to revise)
+
+    /// Writes the value at the given address in memory with privileged access.
+    /// 
+    /// Note that this will trigger IO updates (unlike [`PySimulator::set_mem`]) and should **not** be used
+    /// for directly setting the state of memory. If desired, use the other function instead.
+    /// 
+    /// This was originally `LC3State::memory_write` in complx's pylc3.
     fn write_mem(&mut self, addr: u16, val: u16) -> PyResult<()> {
-        todo!()
+        // TODO: strict?
+        // TODO: don't panic here
+        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged: true, strict: false }).unwrap();
+        Ok(())
     }
 
     /// @see lc3_sym_lookup (ported from pylc3, may need to revise)
@@ -135,16 +164,24 @@ impl PySimulator {
         todo!()
     }
 
-    /// Gets value at address, note that the difference between this and memory_read is that memory_read will trigger plugins and devices (ported from pylc3, may need to revise)
-    /// [ORIGINALLY LC3State::get_memory]
-    fn get_mem(&mut self, addr: u16) -> PyResult<u16> {
-        todo!()
+    /// Gets the value at the given address in memory.
+    /// 
+    /// Note that this reads the state of the memory and will not trigger IO updates (unlike [`PySimulator::read_mem`]).
+    /// If these are desired, use the other function instead.
+    /// 
+    /// This was originally `LC3State::get_memory` in complx's pylc3.
+    fn get_mem(&self, addr: u16) -> u16 {
+        self.sim.mem.get_raw(addr).get()
     }
 
-    /// Sets value at address, note that the difference between this and memory_write is that memory_write will trigger plugins and devices (ported from pylc3, may need to revise)
-    /// [ORIGINALLY LC3State::set_memory]
-    fn set_mem(&mut self, addr: u16, val: u16) -> PyResult<()> {
-        todo!()
+    /// Sets the value at the given address in memory.
+    /// 
+    /// Note that this reads the state of the memory and will not trigger IO updates (unlike [`PySimulator::write_mem`]).
+    /// If these are desired, use the other function instead.
+    /// 
+    /// This was originally `LC3State::set_memory` in complx's pylc3.
+    fn set_mem(&mut self, addr: u16, val: u16) {
+        self.sim.mem.get_raw_mut(addr).set(val);
     }
 
     /// @see lc3_disassemble (ported from pylc3, may need to revise)
@@ -275,37 +312,98 @@ impl PySimulator {
         todo!()
     }
 
+    /// Gets the value stored at the provided register.
+    /// 
+    /// This was originally the following functions in complx's pylc3:
+    /// - `LC3State::get_r0`
+    /// - `LC3State::get_r1`
+    /// - `LC3State::get_r2`
+    /// - `LC3State::get_r3`
+    /// - `LC3State::get_r4`
+    /// - `LC3State::get_r5`
+    /// - `LC3State::get_r6`
+    /// - `LC3State::get_r7`
+    /// - `LC3State::get_register`
+    fn get_reg(&self, index: u8) -> PyResult<u16> {
+        let word = match index {
+            0 => Ok(self.sim.reg_file[R0]),
+            1 => Ok(self.sim.reg_file[R1]),
+            2 => Ok(self.sim.reg_file[R2]),
+            3 => Ok(self.sim.reg_file[R3]),
+            4 => Ok(self.sim.reg_file[R4]),
+            5 => Ok(self.sim.reg_file[R5]),
+            6 => Ok(self.sim.reg_file[R6]),
+            7 => Ok(self.sim.reg_file[R7]),
+            _ => Err(PyIndexError::new_err("invalid register specified (autograder error)")) // TODO: this probably should not cause an error because it cannot be distinguished from a student error
+        }?;
 
-    /// Gets value at address, note that the difference between this and memory_read is that memory_read will trigger plugins and devices (ported from pylc3, may need to revise)
-    /// [ORIGINALLY LC3State::get_r0, ::get_r1, ::get_r2, ::get_r3, ::get_r4, ::get_r5, ::get_r6, ::get_r7, ::get_register]
-    fn get_reg(&mut self, index: u16) -> PyResult<u16> {
-        todo!()
+        Ok(word.get())
     }
 
-    /// Sets value at address, note that the difference between this and memory_write is that memory_write will trigger plugins and devices (ported from pylc3, may need to revise)
-    /// [ORIGINALLY LC3State::set_r0, ::set_r1, ::set_r2, ::set_r3, ::set_r4, ::set_r5, ::set_r6, ::set_r7, ::set_register]
+    /// Sets the value stored at the provided register.
+    /// 
+    /// This was originally the following functions in complx's pylc3:
+    /// - `LC3State::set_r0`
+    /// - `LC3State::set_r1`
+    /// - `LC3State::set_r2`
+    /// - `LC3State::set_r3`
+    /// - `LC3State::set_r4`
+    /// - `LC3State::set_r5`
+    /// - `LC3State::set_r6`
+    /// - `LC3State::set_r7`
+    /// - `LC3State::set_register`
     fn set_reg(&mut self, index: u16, val: u16) -> PyResult<()> {
-        todo!()
+        let word = match index {
+            0 => Ok(&mut self.sim.reg_file[R0]),
+            1 => Ok(&mut self.sim.reg_file[R1]),
+            2 => Ok(&mut self.sim.reg_file[R2]),
+            3 => Ok(&mut self.sim.reg_file[R3]),
+            4 => Ok(&mut self.sim.reg_file[R4]),
+            5 => Ok(&mut self.sim.reg_file[R5]),
+            6 => Ok(&mut self.sim.reg_file[R6]),
+            7 => Ok(&mut self.sim.reg_file[R7]),
+            _ => Err(PyIndexError::new_err("invalid register specified (autograder error)")) // TODO: this probably should not cause an error because it cannot be distinguished from a student error
+        }?;
+
+        word.set(val);
+        Ok(())
     }
 
     /// Gets the n condition code.
-    fn get_n(&mut self) -> PyResult<bool> {
-        todo!()
+    /// 
+    /// This was originally `LC3State::get_n` from complx's pylc3.
+    fn get_n(&self) -> bool {
+        let cc = self.sim.psr().cc();
+        cc & 0b100 != 0
     }
     /// Gets the z condition code.
-    fn get_z(&mut self) -> PyResult<bool> {
-        todo!()
+    /// 
+    /// This was originally `LC3State::get_z` from complx's pylc3.
+    fn get_z(&self) -> bool {
+        let cc = self.sim.psr().cc();
+        cc & 0b010 != 0
     }
     /// Gets the p condition code.
-    fn get_p(&mut self) -> PyResult<bool> {
-        todo!()
+    /// 
+    /// This was originally `LC3State::get_p` from complx's pylc3.
+    fn get_p(&self) -> bool {
+        let cc = self.sim.psr().cc();
+        cc & 0b001 != 0
     }
 
-    fn get_pc(&mut self, ) -> u16 {
-        todo!()
+    /// Gets the current value of the PC.
+    /// 
+    /// This was originally `LC3State::get_pc` from complx's pylc3.
+    fn get_pc(&self) -> u16 {
+        self.sim.pc
     }
+
+    /// Sets the current value of the PC.
+    /// 
+    /// This was originally `LC3State::set_pc` from complx's pylc3.
     fn set_pc(&mut self, addr: u16) {
-        todo!()
+        self.sim.set_pc(Word::new_init(addr), false)
+            .unwrap_or_else(|_| unreachable!("set_pc cannot error with initialized word"))
     }
     fn has_halted(&mut self) {
         todo!()
@@ -425,29 +523,6 @@ impl PySimulator {
     }
     fn first_level_traps(&mut self) -> Vec<(/* lc3_trap_call_info */)> {
         todo!()
-    }
-
-    fn run_(&mut self) -> PyResult<()> {
-        self.sim.run().unwrap();
-        Ok(())
-    }
-
-    fn get_reg_(&self, reg: i32) -> PyResult<u16> {
-        match reg {
-            0 => Ok(self.sim.reg_file[R0].get()),
-            1 => Ok(self.sim.reg_file[R1].get()),
-            2 => Ok(self.sim.reg_file[R2].get()),
-            3 => Ok(self.sim.reg_file[R3].get()),
-            4 => Ok(self.sim.reg_file[R4].get()),
-            5 => Ok(self.sim.reg_file[R5].get()),
-            6 => Ok(self.sim.reg_file[R6].get()),
-            7 => Ok(self.sim.reg_file[R7].get()),
-            _ => Err(PyErr::new::<PyIndexError, _>("Invalid Register Specified"))
-        }
-    }
-
-    fn get_memory(&mut self, addr: u16) -> PyResult<u16>{
-        Ok(self.sim.mem.get_raw(addr).get())
     }
 }
 
