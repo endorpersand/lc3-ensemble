@@ -8,7 +8,7 @@ description = "Small CLI to test the capabilities of lc3-ensemble"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lc3-ensemble = { version = "0.1.0", path = "../" }
+lc3-ensemble = "0.1.0"
 ariadne = "0.4.0"
 clap = { version = "4.5.3", features = ["derive"] }
 
