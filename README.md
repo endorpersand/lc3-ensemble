@@ -1,4 +1,4 @@
-# ensemble (LC3 parser, assembler, and simulator)
+# ensemble (LC-3 parser, assembler, and simulator)
 
 Welcome!
 

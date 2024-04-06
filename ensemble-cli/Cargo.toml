@@ -2,6 +2,8 @@
 name = "ensemble-cli"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Small CLI to test the capabilities of lc3-ensemble"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
