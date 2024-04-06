@@ -3,7 +3,7 @@ workspace = { members = ["ensemble-cli", "ensemble-test"] }
 name = "lc3-ensemble"
 version = "0.1.0"
 edition = "2021"
-license-file = "LICENSE"
+license = "MIT"
 description = "LC-3 parser, assembler, and simulator intended for Georgia Tech's CS 2110 course"
 homepage = "https://github.com/endorpersand/lc3-ensemble/"
 repository = "https://github.com/endorpersand/lc3-ensemble/"
