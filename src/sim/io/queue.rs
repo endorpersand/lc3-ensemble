@@ -11,12 +11,12 @@ use crossbeam_channel as cbc;
 /// 
 /// let queue = BlockingQueue::new(None);
 /// 
-/// // fn write(_: u8) -> Result<(), Stop> { ... }
+/// // fn writer(_: u8) -> Result<(), Stop> { ... }
 /// // let mcr = ...
-/// # fn write(_: u8) -> Result<(), Stop> { Ok(()) }
+/// # fn writer(_: u8) -> Result<(), Stop> { Ok(()) }
 /// # let mcr = std::sync::Arc::default();
 /// 
-/// let io = BiChannelIO::new(queue.reader(), |byte| write(byte), mcr);
+/// let io = BiChannelIO::new(queue.reader(), writer, mcr);
 /// ```
 /// 
 /// [`BiChannelIO`]: super::BiChannelIO
@@ -89,6 +89,15 @@ impl<T> BlockingQueue<T> {
     /// [`Receiver::recv`]: crossbeam_channel::Receiver::recv
     pub fn tail(&self) -> cbc::Receiver<T> {
         self.tail.clone()
+    }
+
+    /// Returns the number of bytes currently in the channel.
+    pub fn len(&self) -> usize {
+        self.head.len()
+    }
+    /// Returns whether there are any bytes in the channel (`true` if not).
+    pub fn is_empty(&self) -> bool {
+        self.head.is_empty()
     }
 
     /// A utility to allow this queue to interop with [`BiChannelIO`].

@@ -5,6 +5,9 @@
 //! - [`Mem`]: The memory.
 //! - [`RegFile`]: The register file.
 
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 use crate::ast::Reg;
 
 use super::{IODevice, SimErr, SimIO};
@@ -15,6 +18,8 @@ use super::{IODevice, SimErr, SimIO};
 /// 
 /// A word's value can be read with [`Word::get`]
 /// to return its representation as an unsigned integer.
+/// 
+/// This can be converted to a signed integer with typical `as` casting (`data as i16`).
 /// 
 /// # Writing
 /// 
@@ -28,6 +33,21 @@ use super::{IODevice, SimErr, SimIO};
 /// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
 /// All arithmetic operations that can be applied to words are assumed to be wrapping.
 /// See those implementations for more details.
+/// 
+/// # Initialization
+/// 
+/// Internally, each memory location keeps track of two fields:
+/// 1. its data (i.e., the value stored at this location)
+/// 2. which bits of its data are truly "initialized" (as in the program knows what values are present there)
+/// 
+/// This second field is not used except for when the simulator is set to strict mode.
+/// Then, this second field is leveraged to detect if uninitialized memory is being
+/// written to places it shouldn't be (e.g., PC, addresses, registers and memory).
+/// 
+/// When a `Word` is created for memory/register files (i.e., via [`Word::new_uninit`]), 
+/// it is created with the initialization bits set to fully uninitialized.
+/// The data associated with this `Word` is decided by the creation strategy 
+/// (see [`WordCreateStrategy`] for details).
 #[derive(Debug, Clone, Copy)]
 pub struct Word {
     data: u16,
@@ -36,11 +56,63 @@ pub struct Word {
 
 const NO_BITS:  u16 = 0;
 const ALL_BITS: u16 = 1u16.wrapping_neg();
+
+/// Strategies to create a new uninitialized Word.
+/// 
+/// This is used as a parameter in [`Word::new_uninit`] to describe how a newly uninitialized `Word` is created.
+#[derive(Debug, Default)]
+pub enum WordCreateStrategy {
+    /// Initializes each word randomly and non-deterministically.
+    #[default]
+    Unseeded,
+
+    /// Initializes each word randomly and deterministically.
+    /// 
+    /// This can be created readily with [`WordCreateStrategy::seeded`].
+    Seeded {
+        /// The seed the RNG was initialized with.
+        seed: u64,
+        /// The RNG.
+        rand: Box<StdRng>
+    },
+
+    /// Initializes each word to a known value.
+    Known(u16)
+}
+impl WordCreateStrategy {
+    /// Creates a word creation strategy that relies on a deterministic, seeded random number generator.
+    /// 
+    /// The produced words from this strategy should be consistent as long as the version of `rand` stays consistent.
+    pub fn seeded(seed: u64) -> Self {
+        WordCreateStrategy::Seeded {
+            seed,
+            rand: Box::new(StdRng::seed_from_u64(seed)),
+        }
+    }
+
+    fn generate(&mut self) -> u16 {
+        match self {
+            WordCreateStrategy::Unseeded => rand::random(),
+            WordCreateStrategy::Seeded { rand, .. } => rand.gen(),
+            WordCreateStrategy::Known(k) => *k,
+        }
+    }
+
+    /// Resets the state of this word creation strategy.
+    pub fn reset(&mut self) {
+        match self {
+            WordCreateStrategy::Unseeded => { /* nothing */ },
+            WordCreateStrategy::Seeded { seed, rand } => **rand = StdRng::seed_from_u64(*seed),
+            WordCreateStrategy::Known(_) => { /* nothing */ },
+        }
+    }
+}
+
 impl Word {
     /// Creates a new word that is considered uninitialized.
-    pub fn new_uninit() -> Self {
+    pub fn new_uninit(strat: &mut WordCreateStrategy) -> Self {
         Self {
-            data: rand::random(),
+            data: strat.generate(),
             init: NO_BITS,
         }
     }
@@ -61,7 +133,10 @@ impl Word {
     pub fn is_init(&self) -> bool {
         self.init == ALL_BITS
     }
-
+    /// Clears initialization of this word.
+    pub fn clear_init(&mut self) {
+        self.init = NO_BITS;
+    }
     /// Writes to the word.
     /// 
     /// The data provided is assumed to be FULLY initialized,
@@ -276,7 +351,7 @@ impl AssertInit for Word {
 
 /// Context behind a memory access.
 /// 
-/// This struct is used by [`Mem::get`] and [`Mem::set`] to perform checks against memory accesses.
+/// This struct is used by [`Mem::read`] and [`Mem::write`] to perform checks against memory accesses.
 /// A default memory access context for the given simulator can be constructed with [`super::Simulator::default_mem_ctx`].
 #[derive(Clone, Copy)]
 pub struct MemAccessCtx {
@@ -285,7 +360,7 @@ pub struct MemAccessCtx {
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
     /// 
-    /// This does not affect [`Mem::get`].
+    /// This does not affect [`Mem::read`].
     pub strict: bool
 }
 
@@ -300,10 +375,10 @@ pub struct Mem {
     pub(super) io: SimIO
 }
 impl Mem {
-    /// Creates a new memory with a provided initializer.
-    fn create_with(initializer: impl FnMut() -> Word) -> Self {
+    /// Creates a new memory with a provided word creation strategy.
+    pub fn new(strat: &mut WordCreateStrategy) -> Self {
         Self {
-            data: std::iter::repeat_with(initializer)
+            data: std::iter::repeat_with(|| Word::new_uninit(strat))
                 .take(N)
                 .collect::<Box<_>>()
                 .try_into()
@@ -311,42 +386,97 @@ impl Mem {
             io: SimIO::Empty
         }
     }
-    /// Creates a new memory with random, uninitialized values.
-    pub fn new() -> Self {
-        Self::create_with(Word::new_uninit)
-    }
 
-    /// Creates a new memory with zeroed (but initialized) values.
-    pub fn zeroed() -> Self {
-        Self::create_with(|| Word::new_init(0))
-    }
-
-    /// Copies a block into this memory.
-    pub fn copy_block(&mut self, start: u16, data: &[Word]) {
+    /// Copies an object file block into this memory.
+    pub fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
         let mem = &mut self.data;
-        let end = start.wrapping_add(data.len() as u16);
-        if start <= end {
-            // contiguous copy
-            let range = (start as usize)..(end as usize);
-            mem[range].copy_from_slice(data);
-        } else {
-            // discontiguous copy
-            let len = start.wrapping_neg() as usize;
-            let (left, right) = data.split_at(len);
-            mem[(start as usize)..].copy_from_slice(left);
-            mem[..(end as usize)].copy_from_slice(right);
+
+        // separate data into chunks of initialized/uninitialized
+        for chunk in data.chunk_by(|a, b| a.is_some() == b.is_some()) {
+            let end = start.wrapping_add(chunk.len() as u16);
+
+            let si = usize::from(start);
+            let ei = usize::from(end);
+            let block_is_contiguous = start <= end;
+
+            if chunk[0].is_some() { // if chunk is init, copy the data over
+                let ch: Vec<_> = chunk.iter()
+                    .map(|&opt| opt.unwrap())
+                    .map(Word::new_init)
+                    .collect();
+
+                if block_is_contiguous {
+                    mem[si..ei].copy_from_slice(&ch);
+                } else {
+                    let (left, right) = ch.split_at(start.wrapping_neg() as usize);
+                    mem[si..].copy_from_slice(left);
+                    mem[..ei].copy_from_slice(right)
+                }
+            } else { // if chunk is uninit, clear the initialization state
+                if block_is_contiguous {
+                    for word in &mut mem[si..ei] {
+                        word.clear_init();
+                    }
+                } else {
+                    for word in &mut mem[si..] {
+                        word.clear_init();
+                    }
+                    for word in &mut mem[..ei] {
+                        word.clear_init();
+                    }
+                }
+            }
+
+            start = end;
         }
     }
 
-    /// Fallibly gets the word at the provided index, erroring if not possible.
+    /// Gets a reference to a word from the memory's current state.
+    /// 
+    /// This is **only** meant to be used to query the state of the memory,
+    /// not to simulate a read from memory.
+    /// 
+    /// Note the differences from [`Mem::read`]:
+    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
+    /// - This function does not require [`MemAccessCtx`].
+    /// - This function does not perform access violation checks.
+    /// 
+    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
+    /// [`Mem::read`] should be used instead.
+    pub fn get_raw(&self, addr: u16) -> &Word {
+        // Mem could implement Index<u16>, but it doesn't as a lint against using this function incorrectly.
+        &self.data[usize::from(addr)]
+    }
+    
+    /// Gets a mutable reference to a word from the memory's current state.
+    /// 
+    /// This is **only** meant to be used to query/edit the state of the memory,
+    /// not to simulate a write from memory.
+    /// 
+    /// Note the differences from [`Mem::write`]:
+    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
+    /// - This function does not require [`MemAccessCtx`].
+    /// - This function does not perform access violation checks or strict uninitialized memory checking.
+    /// 
+    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
+    /// [`Mem::write`] should be used instead.
+    pub fn get_raw_mut(&mut self, addr: u16) -> &mut Word {
+        // Mem could implement IndexMut<u16>, but it doesn't as a lint against using this function incorrectly.
+        &mut self.data[usize::from(addr)]
+    }
+
+    /// Fallibly reads the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
     /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
     /// 
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
-    /// - `strict`: not used for get
-    pub fn get(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
+    /// - `strict`: not used for `read`
+    /// 
+    /// Note that this method is used for simulating a read. If you would like to query the memory's state, 
+    /// consider [`Mem::get_raw`].
+    pub fn read(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
 
         if addr >= IO_START {
@@ -356,7 +486,8 @@ impl Mem {
         }
         Ok(self.data[usize::from(addr)])
     }
-    /// Fallibly attempts to set at the provided index, erroring if not possible.
+
+    /// Fallibly writes the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
     /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
@@ -364,7 +495,10 @@ impl Mem {
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
     /// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error.
-    pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
+    /// 
+    /// Note that this method is used for simulating a write. If you would like to edit the memory's state, 
+    /// consider [`Mem::get_raw_mut`].
+    pub fn write(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
         let write_to_mem = if addr >= IO_START {
@@ -381,11 +515,6 @@ impl Mem {
         Ok(())
     }
 }
-impl Default for Mem {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// The register file. 
 /// 
@@ -394,13 +523,8 @@ impl Default for Mem {
 pub struct RegFile([Word; 8]);
 impl RegFile {
     /// Creates a register file with uninitialized data.
-    pub fn new() -> Self {
-        Self(std::array::from_fn(|_| Word::new_uninit()))
-    }
-
-    /// Creates a register file with zeroed data.
-    pub fn zeroed() -> Self {
-        Self(std::array::from_fn(|_| Word::new_init(0)))
+    pub fn new(strat: &mut WordCreateStrategy) -> Self {
+        Self(std::array::from_fn(|_| Word::new_uninit(strat)))
     }
 }
 impl std::ops::Index<Reg> for RegFile {
@@ -413,10 +537,5 @@ impl std::ops::Index<Reg> for RegFile {
 impl std::ops::IndexMut<Reg> for RegFile {
     fn index_mut(&mut self, index: Reg) -> &mut Self::Output {
         &mut self.0[usize::from(index)]
-    }
-}
-impl Default for RegFile {
-    fn default() -> Self {
-        Self::new()
     }
 }

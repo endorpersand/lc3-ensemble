@@ -2,8 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::sim::mem::Word;
-
 use super::{ObjectFile, SymbolTable};
 
 impl ObjectFile {
@@ -51,10 +49,10 @@ impl ObjectFile {
             bytes.extend(u16::to_le_bytes(data.len() as u16));
             bytes.extend(u64::to_le_bytes(orig_span.start as u64));
             bytes.extend(u64::to_le_bytes(orig_span.end as u64));
-            for word in data {
-                if word.is_init() {
+            for &word in data {
+                if let Some(val) = word {
                     bytes.push(0xFF);
-                    bytes.extend(u16::to_le_bytes(word.get()));
+                    bytes.extend(u16::to_le_bytes(val));
                 } else {
                     bytes.extend([0x00; 3]);
                 }
@@ -101,8 +99,7 @@ impl ObjectFile {
         let mut nl_indices = None;
         let mut src = None;
 
-        while !vec.is_empty() {
-            let Some((ident_byte, rest)) = vec.split_first() else { unreachable!() };
+        while let Some((ident_byte, rest)) = vec.split_first() {
             vec = rest;
             match ident_byte {
                 0x00 => {
@@ -112,10 +109,9 @@ impl ObjectFile {
                     let orig_span_end   = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
 
                     let orig_span = orig_span_start..orig_span_end;
-                    let data = map_chunks::<_, 3>(take_slice(&mut vec, 3 * usize::from(data_len))?, |[init, rest @ ..]| match init != 0 {
-                        true  => Word::new_init(u16::from_le_bytes(rest)),
-                        false => Word::new_uninit(),
-                    });
+                    let data = map_chunks::<_, 3>(take_slice(&mut vec, 3 * usize::from(data_len))?, 
+                        |[init, rest @ ..]| (init == 0xFF).then(|| u16::from_le_bytes(rest))
+                    );
 
                     block_map.insert(addr, (data, orig_span));
                 },

@@ -87,7 +87,7 @@ fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
     let obj = ObjectFile::read_bytes(&bytes)
         .ok_or_else(|| report_simple(obj_input, "could not parse object file"))?;
 
-    let mut sim = Simulator::new();
+    let mut sim = Simulator::new(Default::default());
     sim.load_os();
     sim.load_obj_file(&obj);
     sim.strict = strict;
