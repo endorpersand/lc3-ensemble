@@ -82,8 +82,7 @@ class Simulator:
     def get_n(self) -> bool: pass
     def get_z(self) -> bool: pass
     def get_p(self) -> bool: pass
-    def get_pc(self) -> int: pass
-    def set_pc(self, addr: int) -> None: pass
+    
     def has_halted(self) -> None: pass
     def get_executions(self) -> int: pass
     def get_memory_ops(self) -> dict[int, None]: pass
@@ -92,31 +91,69 @@ class Simulator:
     def get_blackboxes(self) -> dict[int, None]: pass
     def get_memory_watchpoints(self) -> dict[int, None]: pass
     def get_register_watchpoints(self) -> dict[int, None]: pass
-    def get_max_undo_stack_size(self) -> int: pass
-    def set_max_undo_stack_size(self, size: int) -> None: pass
-    def get_max_call_stack_size(self) -> int: pass
-    def set_max_call_stack_size(self, size: int) -> None: pass
-    def get_true_traps(self) -> bool: pass
-    def set_true_traps(self, status: bool) -> None: pass
-    def get_lc3_version(self) -> int: pass
-    def set_lc3_version(self, version: int) -> None: pass
-    def get_interrupts(self) -> bool: pass
-    def set_interrupts(self, status: bool) -> None: pass
-    def enable_keyboard_interrupt(self) -> None: pass
-    def get_keyboard_interrupt_delay(self) -> int: pass
-    def set_keyboard_intget_keyboard_interrupt_delay(self, delay: int) -> None: pass
-    def get_strict_execution(self) -> bool: pass
-    def set_strict_execution(self, status: bool) -> None: pass
+    
     def setup_replay(self, file: str, replay_str: str) -> None: pass
     def describe_replay(self, replay_str: str) -> None: pass
-    def get_input(self) -> str: pass
-    def set_input(self, input: str) -> None: pass
-    def get_output(self) -> str: pass
-    def set_output(self, output: str) -> None: pass
-    def get_warnings(self) -> str: pass
-    def set_warnings(self, warnings: str) -> None: pass
+
     def first_level_calls(self) -> list[None]: pass
     def first_level_traps(self) -> list[None]: pass
+
+    # Simulator properties
+    @property
+    def pc(self) -> int: pass
+    @pc.setter
+    def pc(self, addr: int) -> None: pass
+
+    @property
+    def max_undo_stack_size(self) -> int: pass
+    @max_undo_stack_size.setter
+    def max_undo_stack_size(self, size: int) -> None: pass
+    
+    @property
+    def max_call_stack_size(self) -> int: pass
+    @max_call_stack_size.setter
+    def max_call_stack_size(self, size: int) -> None: pass
+    
+    @property
+    def true_traps(self) -> bool: pass
+    @true_traps.setter
+    def true_traps(self, status: bool) -> None: pass
+    
+    @property
+    def lc3_version(self) -> int: pass
+    @lc3_version.setter
+    def lc3_version(self, version: int) -> None: pass
+    
+    @property
+    def interrupts(self) -> bool: pass
+    @interrupts.setter
+    def interrupts(self, status: bool) -> None: pass
+    def enable_keyboard_interrupt(self) -> None: pass
+    
+    @property
+    def keyboard_interrupt_delay(self) -> int: pass
+    @keyboard_interrupt_delay.setter
+    def keyboard_interrupt_delay(self, delay: int) -> None: pass
+    
+    @property
+    def strict_execution(self) -> bool: pass
+    @strict_execution.setter
+    def strict_execution(self, status: bool) -> None: pass
+    
+    @property
+    def input(self) -> str: pass
+    @input.setter
+    def input(self, input: str) -> None: pass
+    
+    @property
+    def output(self) -> str: pass
+    @output.setter
+    def output(self, output: str) -> None: pass
+    
+    @property
+    def warnings(self) -> str: pass
+    @warnings.setter
+    def warnings(self, warnings: str) -> None: pass
 
 class Reg:
     def __new__(self, regno: int): pass

@@ -430,14 +430,16 @@ impl PySimulator {
 
     /// Gets the current value of the PC.
     /// 
-    /// This was originally `LC3State::get_pc` from complx's pylc3.
+    /// This was originally `LC3State::get_pc`/`LC3State.pc` from complx's pylc3.
+    #[getter]
     fn get_pc(&self) -> u16 {
         self.sim.pc
     }
 
     /// Sets the current value of the PC.
     /// 
-    /// This was originally `LC3State::set_pc` from complx's pylc3.
+    /// This was originally `LC3State::set_pc`/`LC3State.pc` from complx's pylc3.
+    #[setter]
     fn set_pc(&mut self, addr: u16) {
         self.sim.set_pc(Word::new_init(addr), false)
             .unwrap_or_else(|_| unreachable!("set_pc cannot error with initialized word"))
@@ -472,37 +474,47 @@ impl PySimulator {
         todo!()
     }
 
+    #[getter]
     fn get_max_undo_stack_size(&mut self) -> u32 {
         todo!()
     }
+    #[setter]
     fn set_max_undo_stack_size(&mut self, size: u32) {
         todo!()
     }
 
+    #[getter]
     fn get_max_call_stack_size(&mut self) -> u32 {
         todo!()
     }
+    #[setter]
     fn set_max_call_stack_size(&mut self, size: u32) {
         todo!()
     }
 
+    #[getter]
     fn get_true_traps(&mut self) -> bool {
         todo!()
     }
+    #[setter]
     fn set_true_traps(&mut self, status: bool) {
         todo!()
     }
 
+    #[getter]
     fn get_lc3_version(&mut self) -> i32 {
         todo!()
     }
+    #[setter]
     fn set_lc3_version(&mut self, version: i32) {
         todo!()
     }
     
+    #[getter]
     fn get_interrupts(&mut self) -> bool {
         todo!()
     }
+    #[setter]
     fn set_interrupts(&mut self, status: bool) {
         todo!()
     }
@@ -511,16 +523,20 @@ impl PySimulator {
         todo!()
     }
     
+    #[getter]
     fn get_keyboard_interrupt_delay(&mut self) -> u32 {
         todo!()
     }
-    fn set_keyboard_intget_keyboard_interrupt_delay(&mut self, delay: u32) {
+    #[setter]
+    fn set_keyboard_interrupt_delay(&mut self, delay: u32) {
         todo!()
     }
 
+    #[getter]
     fn get_strict_execution(&mut self) -> bool {
         todo!()
     }
+    #[setter]
     fn set_strict_execution(&mut self, status: bool) {
         todo!()
     }
@@ -533,23 +549,29 @@ impl PySimulator {
     }
 
     /// The following accessors are only meaningful if testing_mode was set (ported from pylc3, may need to revise)
+    #[getter]
     fn get_input(&mut self) -> &str {
         todo!()
     }
+    #[setter]
     fn set_input(&mut self, input: String) {
         todo!()
     }
 
+    #[getter]
     fn get_output(&mut self) -> &str {
         todo!()
     }
+    #[setter]
     fn set_output(&mut self, output: String) {
         todo!()
     }
 
+    #[getter]
     fn get_warnings(&mut self) -> &str {
         todo!()
     }
+    #[setter]
     fn set_warnings(&mut self, warnings: String) {
         todo!()
     }
