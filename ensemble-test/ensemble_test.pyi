@@ -117,3 +117,14 @@ class Simulator:
     def set_warnings(self, warnings: str) -> None: pass
     def first_level_calls(self) -> list[None]: pass
     def first_level_traps(self) -> list[None]: pass
+
+class Reg:
+    def __new__(self, regno: int): pass
+    R0: Reg
+    R1: Reg
+    R2: Reg
+    R3: Reg
+    R4: Reg
+    R5: Reg
+    R6: Reg
+    R7: Reg

@@ -1,12 +1,57 @@
 use std::collections::HashMap;
 
 use lc3_ensemble::asm::assemble_debug;
-use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
 use pyo3::prelude::*;
-use pyo3::exceptions::PyIndexError;
+use pyo3::exceptions::PyValueError;
+
+/// A register number.
+/// 
+/// Used for [`Simulator::get_reg`] and [`Simulator::set_reg`].
+/// 
+/// [`Simulator::get_reg`]: [`PySimulator::get_reg`]
+/// [`Simulator::set_reg`]: [`PySimulator::set_reg`]
+#[derive(Clone, Copy)]
+#[pyclass]
+enum Reg {
+    R0, R1, R2, R3, R4, R5, R6, R7
+}
+#[pymethods]
+impl Reg {
+    /// Creates a new register from an integer.
+    #[new]
+    fn new(n: u8) -> PyResult<Self> {
+        match n {
+            0 => Ok(Self::R0),
+            1 => Ok(Self::R1),
+            2 => Ok(Self::R2),
+            3 => Ok(Self::R3),
+            4 => Ok(Self::R4),
+            5 => Ok(Self::R5),
+            6 => Ok(Self::R6),
+            7 => Ok(Self::R7),
+            _ => Err(PyValueError::new_err(format!("register {n} out of bounds")))
+        }
+    }
+}
+impl From<Reg> for lc3_ensemble::ast::Reg {
+    fn from(value: Reg) -> Self {
+        use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
+
+        match value {
+            Reg::R0 => R0,
+            Reg::R1 => R1,
+            Reg::R2 => R2,
+            Reg::R3 => R3,
+            Reg::R4 => R4,
+            Reg::R5 => R5,
+            Reg::R6 => R6,
+            Reg::R7 => R7,
+        }
+    }
+}
 
 #[pyclass(name="Simulator")]
 struct PySimulator {
@@ -324,20 +369,8 @@ impl PySimulator {
     /// - `LC3State::get_r6`
     /// - `LC3State::get_r7`
     /// - `LC3State::get_register`
-    fn get_reg(&self, index: u8) -> PyResult<u16> {
-        let word = match index {
-            0 => Ok(self.sim.reg_file[R0]),
-            1 => Ok(self.sim.reg_file[R1]),
-            2 => Ok(self.sim.reg_file[R2]),
-            3 => Ok(self.sim.reg_file[R3]),
-            4 => Ok(self.sim.reg_file[R4]),
-            5 => Ok(self.sim.reg_file[R5]),
-            6 => Ok(self.sim.reg_file[R6]),
-            7 => Ok(self.sim.reg_file[R7]),
-            _ => Err(PyIndexError::new_err("invalid register specified (autograder error)")) // TODO: this probably should not cause an error because it cannot be distinguished from a student error
-        }?;
-
-        Ok(word.get())
+    fn get_reg(&self, index: Reg) -> u16 {
+        self.sim.reg_file[index.into()].get()
     }
 
     /// Sets the value stored at the provided register.
@@ -352,21 +385,8 @@ impl PySimulator {
     /// - `LC3State::set_r6`
     /// - `LC3State::set_r7`
     /// - `LC3State::set_register`
-    fn set_reg(&mut self, index: u16, val: u16) -> PyResult<()> {
-        let word = match index {
-            0 => Ok(&mut self.sim.reg_file[R0]),
-            1 => Ok(&mut self.sim.reg_file[R1]),
-            2 => Ok(&mut self.sim.reg_file[R2]),
-            3 => Ok(&mut self.sim.reg_file[R3]),
-            4 => Ok(&mut self.sim.reg_file[R4]),
-            5 => Ok(&mut self.sim.reg_file[R5]),
-            6 => Ok(&mut self.sim.reg_file[R6]),
-            7 => Ok(&mut self.sim.reg_file[R7]),
-            _ => Err(PyIndexError::new_err("invalid register specified (autograder error)")) // TODO: this probably should not cause an error because it cannot be distinguished from a student error
-        }?;
-
-        word.set(val);
-        Ok(())
+    fn set_reg(&mut self, index: Reg, val: u16) {
+        self.sim.reg_file[index.into()].set(val)
     }
 
     /// Gets the n condition code.
@@ -528,8 +548,9 @@ impl PySimulator {
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn ensemble_test(_py: Python, m: &PyModule) -> PyResult<()> {
+fn ensemble_test(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PySimulator>()?;
-    //m.add_function(wrap_pyfunction!(load_source, m)?)?;
+    m.add_class::<Reg>()?;
+
     Ok(())
 }
