@@ -7,6 +7,15 @@ use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 
+/// LC-3 tester framework, built on [`lc3_ensemble`].
+#[pymodule]
+fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySimulator>()?;
+    m.add_class::<Reg>()?;
+
+    Ok(())
+}
+
 /// A register number.
 /// 
 /// Used for [`Simulator::get_reg`] and [`Simulator::set_reg`].
@@ -14,7 +23,7 @@ use pyo3::exceptions::PyValueError;
 /// [`Simulator::get_reg`]: [`PySimulator::get_reg`]
 /// [`Simulator::set_reg`]: [`PySimulator::set_reg`]
 #[derive(Clone, Copy)]
-#[pyclass]
+#[pyclass(module="ensemble_test")]
 enum Reg {
     R0, R1, R2, R3, R4, R5, R6, R7
 }
@@ -53,7 +62,7 @@ impl From<Reg> for lc3_ensemble::ast::Reg {
     }
 }
 
-#[pyclass(name="Simulator")]
+#[pyclass(name="Simulator", module="ensemble_test")]
 struct PySimulator {
     sim: Simulator,
 }
@@ -544,13 +553,4 @@ impl PySimulator {
     fn first_level_traps(&mut self) -> Vec<(/* lc3_trap_call_info */)> {
         todo!()
     }
-}
-
-/// A Python module implemented in Rust.
-#[pymodule]
-fn ensemble_test(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<PySimulator>()?;
-    m.add_class::<Reg>()?;
-
-    Ok(())
 }
