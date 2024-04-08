@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use lc3_ensemble::asm::assemble_debug;
+use lc3_ensemble::err::Error;
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
-use pyo3::prelude::*;
+use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::PyValueError;
 
 /// LC-3 tester framework, built on [`lc3_ensemble`].
@@ -12,9 +13,14 @@ use pyo3::exceptions::PyValueError;
 fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimulator>()?;
     m.add_class::<Reg>()?;
-
+    m.add("LoadError", py.get_type_bound::<LoadError>())?;
+    m.add("SimError", py.get_type_bound::<SimError>())?;
+    
     Ok(())
 }
+
+create_exception!(ensemble_test, LoadError, PyValueError);
+create_exception!(ensemble_test, SimError, PyValueError);
 
 /// A register number.
 /// 
@@ -80,8 +86,10 @@ impl PySimulator {
         self.sim = Simulator::new(WordCreateStrategy::Unseeded);
         
         let src = std::fs::read_to_string(src_fp)?;
-        let ast = parse_ast(&src).unwrap();
-        let obj = assemble_debug(ast, &src).unwrap();
+        let ast = parse_ast(&src)
+            .map_err(|e| LoadError::new_err(format!("{e} ({:?})", e.span().as_ref().map_or::<&dyn std::fmt::Debug, _>(&"?", |s| s))))?;
+        let obj = assemble_debug(ast, &src)
+            .map_err(|e| LoadError::new_err(format!("{e} ({:?})", e.span().as_ref().map_or::<&dyn std::fmt::Debug, _>(&"?", |s| s))))?;
 
         self.sim.load_obj_file(&obj);
         Ok(())
@@ -126,18 +134,16 @@ impl PySimulator {
     /// This was originally `LC3State::run` in complx's pylc3.
     fn run(&mut self, n: Option<usize>) -> PyResult<()> {
         // TODO, use n to keep track of number of steps.
-        // TODO: don't panic here
-        self.sim.run().unwrap();
-        Ok(())
+        self.sim.run()
+            .map_err(|e| SimError::new_err(e.to_string()))
     }
 
     /// Performs one step in.
     /// 
     /// This was originally `LC3State::step` in complx's pylc3.
     fn step(&mut self) -> PyResult<()> {
-        // TODO: don't panic here
-        self.sim.step_in().unwrap();
-        Ok(())
+        self.sim.step_in()
+            .map_err(|e| SimError::new_err(e.to_string()))
     }
 
     /// @see lc3_back (ported from pylc3, may need to revise)
@@ -154,14 +160,15 @@ impl PySimulator {
     /// 
     /// This was originally `LC3State::finish` in complx's pylc3.
     fn finish(&mut self) -> PyResult<()> {
-        // TODO: don't panic here
-        self.sim.step_out().unwrap();
-        Ok(())
+        self.sim.step_out()
+            .map_err(|e| SimError::new_err(e.to_string()))
     }
 
     /// @see lc3_next_line (ported from pylc3, may need to revise)
     fn next_line(&mut self, n: Option<usize>) -> PyResult<()> {
-        todo!()
+        // TODO, use n to keep track of number of steps.
+        self.sim.step_over()
+            .map_err(|e| SimError::new_err(e.to_string()))
     }
     
     /// @see lc3_prev_line (ported from pylc3, may need to revise)
@@ -178,8 +185,10 @@ impl PySimulator {
     /// This was originally `LC3State::memory_read` in complx's pylc3.
     fn read_mem(&mut self, addr: u16) -> PyResult<u16> {
         // TODO: strict?
-        // TODO: don't panic here
-        Ok(self.sim.mem.read(addr, MemAccessCtx { privileged: true, strict: false }).unwrap().get())
+        let word = self.sim.mem.read(addr, MemAccessCtx { privileged: true, strict: false })
+            .map_err(|e| SimError::new_err(e.to_string()))?;
+
+        Ok(word.get())
     }
     
 
@@ -191,9 +200,8 @@ impl PySimulator {
     /// This was originally `LC3State::memory_write` in complx's pylc3.
     fn write_mem(&mut self, addr: u16, val: u16) -> PyResult<()> {
         // TODO: strict?
-        // TODO: don't panic here
-        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged: true, strict: false }).unwrap();
-        Ok(())
+        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged: true, strict: false })
+            .map_err(|e| SimError::new_err(e.to_string()))
     }
 
     /// @see lc3_sym_lookup (ported from pylc3, may need to revise)

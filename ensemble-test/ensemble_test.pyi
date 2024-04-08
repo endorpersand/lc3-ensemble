@@ -128,3 +128,8 @@ class Reg:
     R5: Reg
     R6: Reg
     R7: Reg
+
+class LoadError(ValueError):
+    pass
+class SimError(ValueError):
+    pass
