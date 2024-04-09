@@ -20,11 +20,12 @@ https://github.com/complx-tools/pylc3-examples
 
 import base64
 import enum
+import functools
+import io
 import json
 from .. import core
 import pathlib
 import re
-import six
 import struct
 import unittest
 import zlib
@@ -255,7 +256,7 @@ def _formDataPreconditions(t):
 
 
 def _cstringifyData(data):
-    return [six.u(d) + '\0' if isinstance(d, str) else d for d in list(data)]
+    return [d + '\0' if isinstance(d, str) else d for d in list(data)]
 
 
 class SubroutineCallMode(enum.Enum):
@@ -287,7 +288,7 @@ class Preconditions(object):
         self._environment_data[type_id.value] = data
 
     def _formBlob(self):
-        file = six.BytesIO()
+        file = io.BytesIO()
 
         for id, value in sorted(self._environment_data.items(), key = lambda x: x[0]):
             file.write(struct.pack('=B', id))
@@ -295,7 +296,7 @@ class Preconditions(object):
         file.write(struct.pack('=B', 16))
 
         for id, label, num_params, params in self._precondition_data:
-            label = six.b(label)
+            label = bytes(label)
 
             file.write(struct.pack('=B', id))
             file.write(struct.pack('=I', len(label)))
@@ -343,7 +344,7 @@ class Postconditions(object):
             self._data.append((type_id.value, 2, value, len(data), data))
 
     def _formBlob(self):
-        file = six.BytesIO()
+        file = io.BytesIO()
 
         self._data.sort(key = lambda x: x[0])
         for id, type, value, num_params, params in self._data:
@@ -359,7 +360,7 @@ class Postconditions(object):
                 params = [param & 0xFFFF for param in params]
                 file.write(struct.pack('=%dH' % num_params, *params))
             elif type == 2:
-                value = six.b(value)
+                value = bytes(value)
                 file.write(struct.pack('=B', id))
                 file.write(struct.pack('=B', type))
                 file.write(struct.pack('=I', len(value)))
@@ -1046,7 +1047,7 @@ class LC3UnitTestCase(unittest.TestCase):
             params[7] = r7
             self._internalAssert('callSubroutine', self._subroutine_call_mode is None or self._subroutine_call_mode == SubroutineCallMode.pass_by_register, "Can't mix subroutine call styles in the same test.", AssertionType.fatal, internal=True)
             self._subroutine_call_mode = SubroutineCallMode.pass_by_register
-            data = list(six.moves.reduce(lambda a, b: a + b, list(params.items())))
+            data = list(functools.reduce(lambda a, b: a + b, list(params.items())))
             self.preconditions.addPrecondition(PreconditionFlag.pass_by_regs, subroutine, data)
         self.preconditions.addEnvironment(PreconditionFlag.break_address, r7)
 
@@ -1105,7 +1106,7 @@ class LC3UnitTestCase(unittest.TestCase):
         if isinstance(params, list):
             self.postconditions.add(PostconditionFlag.subroutine_call, subroutine, params.copy())
         else:
-            data = list(six.moves.reduce(lambda a, b: a + b, list(params.items())))
+            data = list(functools.reduce(lambda a, b: a + b, list(params.items())))
             self.postconditions.add(PostconditionFlag.pass_by_regs, subroutine, data)
 
     def expectTrapCall(self, vector, params, optional=False):
@@ -1144,7 +1145,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert('expectTrapCall', not (value in self.expected_subroutines and value in self.optional_subroutines), 'Trap %s found in both expected and optional subroutine calls.' % str(value), AssertionType.fatal, internal=True)
 
         if params:
-            data = list(six.moves.reduce(lambda a, b: a + b, list(params.items())))
+            data = list(functools.reduce(lambda a, b: a + b, list(params.items())))
         else:
             data = []
         self.postconditions.add(PostconditionFlag.pass_by_regs, 'x%02x' % vector, data)
@@ -1559,7 +1560,7 @@ class LC3UnitTestCase(unittest.TestCase):
         for addr, _ in enumerate(text, start_addr):
             actual_str.append(chr(self._readMem(addr, unsigned=True)))
         actual_str.append(chr(self._readMem(start_addr + len(text), unsigned=True)))
-        expected_str = list(six.u(text))
+        expected_str = list(str(text))
         expected_str.append('\0')
         self._assertEqual(expected_str, actual_str, name or ('string: %s' % label), 'String of characters starting at MEM[%s] was expected to be %s but code produced %s\n' % (label, repr(''.join(expected_str)), repr(''.join(actual_str))), level=level)
         self.postconditions.add(PostconditionFlag.string, label, [ord(char) for char in text])
@@ -1673,7 +1674,7 @@ class LC3UnitTestCase(unittest.TestCase):
         for addr, _ in enumerate(text, start_addr):
             actual_str.append(chr(self._readMem(addr, unsigned=True)))
         actual_str.append(chr(self._readMem(start_addr + len(text), unsigned=True)))
-        expected_str = list(six.u(text))
+        expected_str = list(str(text))
         expected_str.append('\0')
         self._assertEqual(expected_str, actual_str, name or ('stringAt: x%04x' % start_addr), 'String of characters at MEM[x%04x] was expected to be %s but code produced %s\n' % (start_addr, repr(''.join(expected_str)), repr(''.join(actual_str))), level=level)
         self.postconditions.add(PostconditionFlag.direct_string, '%04x' % start_addr, [ord(char) for char in text])
@@ -2004,7 +2005,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert(name or 'trap calls made', len(self.expected_traps) == len(made_calls) and not missing_calls and not unknown_calls, status_message, level=level)
 
     def generateReplayHeader(self, datablob):
-        header = six.BytesIO()
+        header = io.BytesIO()
         header.write(b'lc-3')
         header.write(struct.pack('=I', REPLAY_STRING_VERSION_MAJOR))
         header.write(struct.pack('=I', REPLAY_STRING_VERSION_MINOR))
@@ -2012,7 +2013,7 @@ class LC3UnitTestCase(unittest.TestCase):
         header.write(struct.pack('=I', zlib.crc32(datablob) & 0xffffffff))
         header.write(struct.pack('=B', 1 if self.enable_compression else 0)) # Compression
         header.write(struct.pack('=I', len(self.asm_filename)))
-        header.write(struct.pack('=%ds' % len(self.asm_filename), six.ensure_binary(self.asm_filename)))
+        header.write(struct.pack('=%ds' % len(self.asm_filename), self.asm_filename.encode()))
 
         headerblob = header.getvalue()
         header.close()

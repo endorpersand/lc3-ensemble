@@ -2,7 +2,6 @@ import base64
 import collections
 import logging
 import os
-import six
 import struct
 import sys
 import unittest
@@ -61,7 +60,7 @@ class LC3UnitTestCaseTest(autograder.LC3UnitTestCase):
         os.remove("syntax_error.asm")
 
     def testLoadPatt(self):
-        obj = six.b('\x00\x00\x20\x01\xF0\x25\x00\x00\x00\x02')
+        obj = b'\x00\x00\x20\x01\xF0\x25\x00\x00\x00\x02'
         sym = ('// Symbol table\n'
         '// Scope level 0:\n'
         '//	Symbol Name       Page Address\n'
@@ -1916,7 +1915,7 @@ class LC3UnitTestCaseTest(autograder.LC3UnitTestCase):
         self._writeMem(0x3015, 9901)
         data = self._readData(0x3000, (0, 'xxxx', [0] * 6, (0, ('xxxxx', [0], (0,), 0))))
 
-        self.assertEqual(data, (1, six.u('test\0'), [1, 44, -1, -32768, -1, 32767], (5, (six.u('test2\0'), [44], (8,), 9901))))
+        self.assertEqual(data, (1, ('test\0'), [1, 44, -1, -32768, -1, 32767], (5, (('test2\0'), [44], (8,), 9901))))
 
     def testWriteData(self):
         data = (1, 'test', [1, 44, -1, 0x8000, 0xFFFF, 32767], (5, ('test2', [44], (8,), 9901)))
