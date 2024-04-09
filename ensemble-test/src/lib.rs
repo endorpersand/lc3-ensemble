@@ -44,11 +44,16 @@ struct PySimulator {
 
 #[pymethods]
 impl PySimulator {
+    // USED BY pylc3.autograder
+    // pylc3.core uses signature cls(testing_mode: bool)
     /// Constructs a new simulator in Python.
     #[new]
     fn constructor() -> Self {
         PySimulator { sim: Simulator::new(WordCreateStrategy::Unseeded) }
     }
+
+    // USED BY pylc3.autograder
+    // pylc3.core uses signature self.init(mfs: MemoryFillStrategy, state: int)
 
     /// Initializes simulator's state.
     fn init(&mut self, src_fp: &str) -> PyResult<()> {
@@ -72,6 +77,8 @@ impl PySimulator {
         enable_warnings = false,
         warnings_as_errors = false,
     ))]
+
+    // USED BY pylc3.autograder
     /// Assembles (ported from pylc3, may need to revise)
     /// 
     /// `src_fp`: Full path of the file to load.
@@ -94,10 +101,12 @@ impl PySimulator {
     }
 
     // Test only (ported from pylc3, may need to revise)
+    // USED BY pylc3.autograder
     fn load_code(&mut self, lc3_code: &str) -> PyResult<bool> {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// Runs the simulator until the program halts or `n` steps have been executed.
     /// 
     /// This was originally `LC3State::run` in complx's pylc3.
@@ -173,16 +182,19 @@ impl PySimulator {
             .map_err(|e| SimError::new_err(e.to_string()))
     }
 
+    // USED BY pylc3.autograder
     /// @see lc3_sym_lookup (ported from pylc3, may need to revise)
     fn lookup(&self, label: &str) -> PyResult<u16> {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// @see lc3_sym_rev_lookup (ported from pylc3, may need to revise)
     fn reverse_lookup(&self, addr: u16) -> PyResult<&str> {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// @see lc3_sym_add (ported from pylc3, may need to revise)
     /// [ORIGINALLY LC3State::add_symbol]
     fn add_label(&mut self, label: &str, addr: u16) -> PyResult<bool> {
@@ -195,6 +207,7 @@ impl PySimulator {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// Gets the value at the given address in memory.
     /// 
     /// Note that this reads the state of the memory and will not trigger IO updates (unlike [`PySimulator::read_mem`]).
@@ -205,6 +218,7 @@ impl PySimulator {
         self.sim.mem.get_raw(addr).get()
     }
 
+    // USED BY pylc3.autograder
     /// Sets the value at the given address in memory.
     /// 
     /// Note that this reads the state of the memory and will not trigger IO updates (unlike [`PySimulator::write_mem`]).
@@ -215,16 +229,19 @@ impl PySimulator {
         self.sim.mem.get_raw_mut(addr).set(val);
     }
 
+    // USED BY pylc3.autograder
     /// @see lc3_disassemble (ported from pylc3, may need to revise)
     fn disassemble(&mut self, addr: u16, level: i32) -> PyResult<&str> {
         todo!()
     }
-    
+
+    // USED BY pylc3.autograder
     /// @see lc3_disassemble (ported from pylc3, may need to revise)
     fn disassemble_data(&mut self, addr: u16, level: i32) -> PyResult<&str> {
         todo!()
     }
     
+    // USED BY pylc3.autograder
     /// @see lc3_add_break (ported from pylc3, may need to revise)
     /// [ORIGINALLY LC3State::add_breakpoint]
     #[pyo3(signature=(
@@ -328,20 +345,25 @@ impl PySimulator {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// Adds metadata for the subroutine specified (ported from pylc3, may need to revise)
     fn add_subroutine_info(&mut self, subroutine_label: &str, n_params: u32) -> PyResult<bool> {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// @see srand (ported from pylc3, may need to revise)
     fn seed(&mut self, seed: u32) {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     /// @see lc3_random (ported from pylc3, may need to revise)
     fn random(&mut self) -> u16 {
         todo!()
     }
+
+    // USED BY pylc3.autograder (.rx, register)
 
     /// Gets the value stored at register R0.
     /// 
@@ -510,6 +532,8 @@ impl PySimulator {
         Ok(())
     }
 
+    // USED BY pylc3.autograder (.nzp)
+
     /// Gets the n condition code.
     /// 
     /// This was originally `LC3State::get_n` from complx's pylc3.
@@ -532,6 +556,8 @@ impl PySimulator {
         cc & 0b001 != 0
     }
 
+    // USED BY pylc3.autograder (.pc)
+
     /// Gets the current value of the PC.
     /// 
     /// This was originally `LC3State::get_pc`/`LC3State.pc` from complx's pylc3.
@@ -552,6 +578,7 @@ impl PySimulator {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     #[getter]
     fn get_executions(&self) -> u32 {
         todo!()
@@ -603,50 +630,61 @@ impl PySimulator {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     #[getter]
     fn get_true_traps(&self) -> bool {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_true_traps(&mut self, status: bool) {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     #[getter]
     fn get_lc3_version(&self) -> i32 {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_lc3_version(&mut self, version: i32) {
         todo!()
     }
     
+    // USED BY pylc3.autograder
     #[getter]
     fn get_interrupts(&self) -> bool {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_interrupts(&mut self, status: bool) {
         todo!()
     }
-    
+
+    // USED BY pylc3.autograder
     fn enable_keyboard_interrupt(&mut self) {
         todo!()
     }
     
+    // USED BY pylc3.autograder
     #[getter]
     fn get_keyboard_interrupt_delay(&self) -> u32 {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_keyboard_interrupt_delay(&mut self, delay: u32) {
         todo!()
     }
 
+    // USED BY pylc3.autograder
     #[getter]
     fn get_strict_execution(&self) -> bool {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_strict_execution(&mut self, status: bool) {
         todo!()
@@ -660,36 +698,45 @@ impl PySimulator {
     }
 
     /// The following accessors are only meaningful if testing_mode was set (ported from pylc3, may need to revise)
+    // USED BY pylc3.autograder
     #[getter]
     fn get_input(&self) -> &str {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_input(&mut self, input: String) {
         todo!()
     }
-
+    
+    // USED BY pylc3.autograder
+    // USED BY pylc3.autograder
     #[getter]
     fn get_output(&self) -> &str {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_output(&mut self, output: String) {
         todo!()
     }
-
+    
+    // USED BY pylc3.autograder
     #[getter]
     fn get_warnings(&self) -> &str {
         todo!()
     }
+    // USED BY pylc3.autograder
     #[setter]
     fn set_warnings(&mut self, warnings: String) {
         todo!()
     }
     
+        // USED BY pylc3.autograder
     fn first_level_calls(&self) -> Vec<(/* lc3_subroutine_call_info */)> {
         todo!()
     }
+    // USED BY pylc3.autograder
     fn first_level_traps(&self) -> Vec<(/* lc3_trap_call_info */)> {
         todo!()
     }
