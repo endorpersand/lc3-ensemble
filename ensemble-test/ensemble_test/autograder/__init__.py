@@ -636,7 +636,7 @@ class LC3UnitTestCase(unittest.TestCase):
                 m = re.search(r'//\t(\w+)\s*([0-9A-Fa-f]{4})', line)
                 if m:
                     symbol, location = m.group(1), int(m.group(2), 16)
-                    self.state.add_symbol(symbol, location)
+                    self.state.add_label(symbol, location)
                 line = f.readline()
 
     def _lookup(self, label):
@@ -682,7 +682,7 @@ class LC3UnitTestCase(unittest.TestCase):
             The value stored at that address.
         """
 
-        value = self.state.get_memory(_toUShort(addr))
+        value = self.state.get_mem(_toUShort(addr))
         return value if not unsigned else _toUShort(value)
 
     def _writeMem(self, addr, value):
@@ -693,7 +693,7 @@ class LC3UnitTestCase(unittest.TestCase):
             value: Integer - Value to write.
         """
 
-        self.state.set_memory(_toUShort(addr), value)
+        self.state.set_mem(_toUShort(addr), value)
 
     def _readReg(self, reg, unsigned=False):
         """Reads a value in a register.
@@ -707,7 +707,7 @@ class LC3UnitTestCase(unittest.TestCase):
         """
 
         self._internalAssert('readReg %x' % reg, reg >= 0 and reg < 8, 'Invalid register number %d' % reg, AssertionType.fatal, internal=True)
-        value = self.state.get_register(reg)
+        value = self.state.get_reg(reg)
         return value if not unsigned else _toUShort(value)
 
     def _writeReg(self, reg, value):
@@ -719,7 +719,7 @@ class LC3UnitTestCase(unittest.TestCase):
         """
 
         self._internalAssert('writeReg %x' % reg, reg >= 0 and reg < 8, 'Invalid register number %d' % reg, AssertionType.fatal, internal=True)
-        self.state.set_register(reg, value)
+        self.state.set_reg(reg, value)
 
     def _writeData(self, address, data):
         def _writeDataInternal(address, dataitems, index=0):
@@ -879,7 +879,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self._internalAssert('setRegister', not self._code_has_ran, 'Attempt to set a register after the code has ran', AssertionType.fatal, internal=True)
         self._internalAssert('setRegister', register_number >= 0 and register_number < 8, 'Invalid register number given %d' % register_number, AssertionType.fatal, internal=True)
-        self.state.set_register(register_number, value)
+        self.state.set_reg(register_number, value)
 
         self.preconditions.addPrecondition(PreconditionFlag.register, str(register_number), value)
 
@@ -1026,7 +1026,7 @@ class LC3UnitTestCase(unittest.TestCase):
             self.state.r5 = r5
         self.state.r7 = r7
         self.break_address = r7
-        self.state.add_breakpoint(r7)
+        self.state.add_breakpoint_by_addr(r7)
 
         if isinstance(params, list):
             self.state.r6 = r6 - len(params)
@@ -1345,7 +1345,7 @@ class LC3UnitTestCase(unittest.TestCase):
         """
 
         for id in range(8):
-            self.registers[id] = self.state.get_register(id)
+            self.registers[id] = self.state.get_reg(id)
         self.state.run(max_executions)
         self.replay_msg = self.generateReplayMessage()
 
@@ -1411,9 +1411,9 @@ class LC3UnitTestCase(unittest.TestCase):
         failure_msg += 'This was probably due to an infinite loop in the code.\n' if not malformed else ''
         failure_msg += 'PC: x%04x\nExecuted: %d instructions\nInstruction last on: %s\n' % (self.state.pc, self.state.executions, instruction)
         if self.true_traps:
-            self._assertEqual(self.state.get_memory(0xFFFE) >> 15 & 1, 0, name or 'halted', failure_msg, level=level)
+            self._assertEqual(self.state.get_mem(0xFFFE) >> 15 & 1, 0, name or 'halted', failure_msg, level=level)
         else:
-            self._assertShortEqual(self.state.get_memory(self.state.pc), 0xF025, name or 'halted', failure_msg, level=level)
+            self._assertShortEqual(self.state.get_mem(self.state.pc), 0xF025, name or 'halted', failure_msg, level=level)
         self.postconditions.add(PostconditionFlag.end_state, True)
 
     def assertNoWarnings(self, name=None, level=AssertionType.soft):

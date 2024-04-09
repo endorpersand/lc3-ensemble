@@ -31,7 +31,7 @@ class LC3UnitTestCaseTest(autograder.LC3UnitTestCase):
 
     def loadCode(self, snippet):
         # This function is test only, Only use loadAsmFile for student code.
-        self.state.loadCode(snippet)
+        self.state.load_code(snippet)
         self.asm_filename = 'this is a test'
 
     def testInit(self):
