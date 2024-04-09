@@ -2,16 +2,16 @@
 
 The main class is LC3UnitTestCase and is intended to be used as a base for a python unit test on student code.
 
-The class keeps track of the preconditions and environment set on the LC3State before the code is ran.
-Then when things are checked on the LC3State if any assertion fails a replay string is generated so students,
+The class keeps track of the preconditions and environment set on the Simulator before the code is ran.
+Then when things are checked on the Simulator if any assertion fails a replay string is generated so students,
 can emulate the environment in comp and complx.
 
 It is required to only call methods of this class prefixed with set, expect, and assert and not to access
-any methods of the underlying LC3State to do assertions.  The assertions provided by the LC3UnitTestCase class
+any methods of the underlying Simulator to do assertions.  The assertions provided by the LC3UnitTestCase class
 will produce the replay string upon the assertion failing.
 
 The replay strings produced are only populated with data from calling the methods of this class only.  If any
-modifications to the LC3State object are done directly and not through the LC3UnitTestCase class will not be
+modifications to the Simulator object are done directly and not through the LC3UnitTestCase class will not be
 recorded leading to a frustrating debugging experience.
 
 For examples and demos of real live test and assembly code that passes them see
@@ -21,8 +21,7 @@ https://github.com/complx-tools/pylc3-examples
 import base64
 import enum
 import json
-import pylc3.core
-import os
+from .. import core
 import pathlib
 import re
 import six
@@ -476,8 +475,8 @@ class LC3UnitTestCase(unittest.TestCase):
     is wanted.
 
     For JSON output cls.json_report_format must be set to either
-    pylc3.autograder.lc3_unit_test_case.JsonOutputPerAssertion or
-    pylc3.autograder.lc3_unit_test_case.JsonExpandedOutputPerAssertion
+    ensemble_test.autograder.JsonOutputPerAssertion or
+    ensemble_test.autograder.JsonExpandedOutputPerAssertion
     or additionally a function that takes three parameters (name, passed_tests, failed_tests)
     and returns a map for json output see afforementioned functions for examples.
     """
@@ -507,7 +506,7 @@ class LC3UnitTestCase(unittest.TestCase):
                 json.dump(json_obj, f)
 
     def setUp(self):
-        self.state = pylc3.core.LC3State(testing_mode=True)
+        self.state = core.Simulator(testing_mode=True)
         self.break_address = None
         self.preconditions = Preconditions()
         self.postconditions = Postconditions()
@@ -553,16 +552,16 @@ class LC3UnitTestCase(unittest.TestCase):
         """Initializes LC3 state memory.
 
         Args:
-            strategy: a pylc3.core.MemoryFillStrategy telling how memory should be initialized.
+            strategy: a core.MemoryFillStrategy telling how memory should be initialized.
             value: Parameter for Memory Fill Strategy, either a fill value or random seed.
         """
 
-        if strategy == pylc3.core.MemoryFillStrategy.fill_with_value:
+        if strategy == core.MemoryFillStrategy.fill_with_value:
             self.state.init(False, _toUShort(value))
-        elif strategy == pylc3.core.MemoryFillStrategy.single_random_value_fill:
+        elif strategy == core.MemoryFillStrategy.single_random_value_fill:
             self.state.seed(value)
             self.state.init(False, self.state.random())
-        elif strategy == pylc3.core.MemoryFillStrategy.completely_random:
+        elif strategy == core.MemoryFillStrategy.completely_random:
             self.state.seed(value)
             self.state.init(True)
 
@@ -633,7 +632,7 @@ class LC3UnitTestCase(unittest.TestCase):
         with open(sym_file) as f:
             line = f.readline()
             while line:
-                m = re.search('//\t(\w+)\s*([0-9A-Fa-f]{4})', line)
+                m = re.search(r'//\t(\w+)\s*([0-9A-Fa-f]{4})', line)
                 if m:
                     symbol, location = m.group(1), int(m.group(2), 16)
                     self.state.add_symbol(symbol, location)
@@ -1411,7 +1410,7 @@ class LC3UnitTestCase(unittest.TestCase):
         failure_msg += 'This was probably due to an infinite loop in the code.\n' if not malformed else ''
         failure_msg += 'PC: x%04x\nExecuted: %d instructions\nInstruction last on: %s\n' % (self.state.pc, self.state.executions, instruction)
         if self.true_traps:
-            self._assertEqual(state.get_memory(0xFFFE) >> 15 & 1, 0, name or 'halted', failure_msg, level=level)
+            self._assertEqual(self.state.get_memory(0xFFFE) >> 15 & 1, 0, name or 'halted', failure_msg, level=level)
         else:
             self._assertShortEqual(self.state.get_memory(self.state.pc), 0xF025, name or 'halted', failure_msg, level=level)
         self.postconditions.add(PostconditionFlag.end_state, True)
@@ -1895,7 +1894,7 @@ class LC3UnitTestCase(unittest.TestCase):
                     name, params = subr
                     params_pairs = list(params)
                     params = ', '.join(['R%d=(%d x%04x)' % (reg, value, _toShort(value)) for reg, value in params_pairs])
-                    subr_strs.append('%s(%s)' % (name, params) if params else trap_name)
+                    subr_strs.append('%s(%s)' % (name, params) if params else name)
                 return ' '.join(subr_strs)
 
         def subroutine_matches(a, b):

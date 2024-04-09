@@ -6,16 +6,14 @@ import six
 import struct
 import sys
 import unittest
-import zlib
-import pylc3.core
-from pylc3.autograder import lc3_unit_test_case
-from pylc3.autograder.lc3_unit_test_case import DataItem
+from .. import core, autograder
+from . import DataItem
 
 
 # Note this file is not to be used as a template for writing student tests.
 # See https://github.com/complx-tools/pylc3-examples for example tests
 
-class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
+class LC3UnitTestCaseTest(autograder.LC3UnitTestCase):
 
     def setUp(self):
         super(LC3UnitTestCaseTest, self).setUp()
@@ -38,7 +36,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         self.asm_filename = 'this is a test'
 
     def testInit(self):
-        self.init(pylc3.core.MemoryFillStrategy.fill_with_value, 0x8000)
+        self.init(core.MemoryFillStrategy.fill_with_value, 0x8000)
         self.assertEqual(self._readMem(0x3005) & 0xFFFF, 0x8000)
 
     def testLoadFailed(self):
@@ -54,7 +52,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         text_file.write(snippet)
         text_file.close()
 
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.loadAsmFile("syntax_error.asm")
 
         # Clear so that the test doesn't fail during tearDown.
@@ -104,16 +102,16 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         def badSets(label, ignore_type):
             self.assertEqual(self._modified_labels[label], ignore_type)
             if ignore_type != 'VALUE':
-                with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+                with self.assertRaises(autograder.LC3InternalAssertion):
                     self.setValue(label, 10)
             if ignore_type != 'POINTER':
-                with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+                with self.assertRaises(autograder.LC3InternalAssertion):
                     self.setPointer(label, 10)
             if ignore_type != 'ARRAY':
-                with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+                with self.assertRaises(autograder.LC3InternalAssertion):
                     self.setArray(label, [10])
             if ignore_type != 'STRING':
-                with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+                with self.assertRaises(autograder.LC3InternalAssertion):
                     self.setString(label, 'STR')
 
         badSets("A", "VALUE")
@@ -129,15 +127,15 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         self.asm_filename = ''
 
         # It is an error to fill addresses with values before loading the code.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillValue(0x4000, 10)
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillString(0x4000, "Failure")
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillArray(0x4000, [10, 23, 45])
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillNode(0x4000, 0x4000, (23,))
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillData(0x4000, (23, 24))
 
         # Clear so that the test doesn't fail during tearDown.
@@ -348,7 +346,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
 
         # Sanity checks I
         # This is an error as it is a labelled address, setValue should be used here.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillValue(0x3005, 2)
 
         # Clear so that the test doesn't fail during tearDown.
@@ -364,7 +362,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         self.assertHalted()
         self.assertNoWarnings()
 
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.assertValueAt(0x3005, 2)
 
         # Clear so that the test doesn't fail during tearDown.
@@ -388,7 +386,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         # to put the string) as there is potential to overwrite data past the label. Assembly code should not be setup
         # like so due to this since the fill will happen *after* the code is assembled and loaded.  In either case even
         # if this replacement was still done before assembling data after the label could cause code not to assemble.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillString(0x3000, "HELLO")
 
         # Clear so that the test doesn't fail during tearDown.
@@ -417,7 +415,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         # to put the array) as there is potential to overwrite data past the label. Assembly code should not be setup
         # like so due to this since the fill will happen *after* the code is assembled and loaded.  In either case even
         # if this replacement was still done before assembling data after the label could cause code not to assemble.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillArray(0x3000, [10, 12, 15])
 
         # Clear so that the test doesn't fail during tearDown.
@@ -443,7 +441,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         # to put the array) as there is potential to overwrite data past the label. Assembly code should not be setup
         # like so due to this since the fill will happen *after* the code is assembled and loaded.  In either case even
         # if this replacement was still done before assembling data after the label could cause code not to assemble.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.fillNode(0x3000, next=None, data=(3,))
 
         # Clear so that the test doesn't fail during tearDown.
@@ -527,7 +525,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         # to put the array) as there is potential to overwrite data past the label. Assembly code should not be setup
         # like so due to this since the fill will happen *after* the code is assembled and loaded.  In either case even
         # if this replacement was still done before assembling data after the label could cause code not to assemble.
-        with self.assertRaises(lc3_unit_test_case.LC3InternalAssertion):
+        with self.assertRaises(autograder.LC3InternalAssertion):
             self.assertNodeAt(0x3000, next=None, data=blah(3))
 
         # Clear so that the test doesn't fail during tearDown.
@@ -1561,7 +1559,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         .end
         """
         self.enable_compression = True
-        self.init(pylc3.core.MemoryFillStrategy.fill_with_value, -1)
+        self.init(core.MemoryFillStrategy.fill_with_value, -1)
         self.setTrueTraps(True)
         self.setInterrupts(True)
         self.setPluginsEnabled(True)
@@ -1681,7 +1679,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
             TATA RET
         .end
         """
-        self.init(pylc3.core.MemoryFillStrategy.fill_with_value, -1)
+        self.init(core.MemoryFillStrategy.fill_with_value, -1)
         self.expectSubroutineCall('TATA', [6, 7, 8])
         self.loadCode(snippet)
 
@@ -1689,7 +1687,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         for id in range(8):
             self.registers[id] = id * 3
 
-        self.assertHalted(level=lc3_unit_test_case.AssertionType.soft)
+        self.assertHalted(level=autograder.AssertionType.soft)
         self.assertRegister(6, 0x5030)
         self.assertPc(0x3000)
         self.assertValue('AHH', 0x4000)
@@ -1819,22 +1817,22 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
     # ---- Internal tests begin here ----
     # -----------------------------------
     def testTupleToData(self):
-        data = lc3_unit_test_case.tuple_to_data((1,))
+        data = autograder.tuple_to_data((1,))
         self.assertEqual(data, [DataItem.number, 1])
 
-        data = lc3_unit_test_case.tuple_to_data(("LOL",))
+        data = autograder.tuple_to_data(("LOL",))
         self.assertEqual(data, [DataItem.string, 3, "LOL"])
 
-        data = lc3_unit_test_case.tuple_to_data(([1, 2, 3],))
+        data = autograder.tuple_to_data(([1, 2, 3],))
         self.assertEqual(data, [DataItem.array, 3, [1, 2, 3]])
 
-        data = lc3_unit_test_case.tuple_to_data((("LOL",),))
+        data = autograder.tuple_to_data((("LOL",),))
         self.assertEqual(data, [DataItem.data, DataItem.string, 3, "LOL", DataItem.end_of_data])
 
-        data = lc3_unit_test_case.tuple_to_data(("Some Student", 76, [100, 52]))
+        data = autograder.tuple_to_data(("Some Student", 76, [100, 52]))
         self.assertEqual(data, [DataItem.string, 12, "Some Student", DataItem.number, 76, DataItem.array, 2, [100, 52]])
 
-        data = lc3_unit_test_case.tuple_to_data((1, 'test', [1, 44, -1, 0x8000, 0xFFFF, 32767], (5, ('test2', [44], (8,), 33))))
+        data = autograder.tuple_to_data((1, 'test', [1, 44, -1, 0x8000, 0xFFFF, 32767], (5, ('test2', [44], (8,), 33))))
         self.assertEqual(data, [
             DataItem.number, 1,
             DataItem.string, 4, 'test',
@@ -1853,22 +1851,22 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
             DataItem.end_of_data])
 
     def testTupleToDataSpec(self):
-        data = lc3_unit_test_case.tuple_to_data_spec((1,))
+        data = autograder.tuple_to_data_spec((1,))
         self.assertEqual(data, [DataItem.number])
 
-        data = lc3_unit_test_case.tuple_to_data_spec(("LOL",))
+        data = autograder.tuple_to_data_spec(("LOL",))
         self.assertEqual(data, [DataItem.string, 3])
 
-        data = lc3_unit_test_case.tuple_to_data_spec(([1, 2, 3],))
+        data = autograder.tuple_to_data_spec(([1, 2, 3],))
         self.assertEqual(data, [DataItem.array, 3])
 
-        data = lc3_unit_test_case.tuple_to_data_spec((("LOL",),))
+        data = autograder.tuple_to_data_spec((("LOL",),))
         self.assertEqual(data, [DataItem.data, DataItem.string, 3, DataItem.end_of_data])
 
-        data = lc3_unit_test_case.tuple_to_data_spec(("Some Student", 76, [100, 52]))
+        data = autograder.tuple_to_data_spec(("Some Student", 76, [100, 52]))
         self.assertEqual(data, [DataItem.string, 12, DataItem.number, DataItem.array, 2])
 
-        data = lc3_unit_test_case.tuple_to_data_spec((1, 'test', [1, 44, -1, 0x8000, 0xFFFF, 32767], (5, ('test2', [44], (8,), 33))))
+        data = autograder.tuple_to_data_spec((1, 'test', [1, 44, -1, 0x8000, 0xFFFF, 32767], (5, ('test2', [44], (8,), 33))))
         self.assertEqual(data, [
             DataItem.number,
             DataItem.string, 4,
@@ -1966,7 +1964,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         self.loadCode(snippet)
         self.runCode(max_executions=1)
 
-        self.assertValue("A", 2, level=lc3_unit_test_case.AssertionType.hard)
+        self.assertValue("A", 2, level=autograder.AssertionType.hard)
         self.assertValue("B", 3)
         self.assertValue("C", 4)
 
@@ -1993,7 +1991,7 @@ class LC3UnitTestCaseTest(lc3_unit_test_case.LC3UnitTestCase):
         self.loadCode(snippet)
         self.runCode(max_executions=1)
 
-        self.assertValue("A", 3, level=lc3_unit_test_case.AssertionType.hard)
+        self.assertValue("A", 3, level=autograder.AssertionType.hard)
         self.assertValue("B", 3)
         self.assertValue("C", 4)
 
