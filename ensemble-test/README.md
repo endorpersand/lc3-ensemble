@@ -25,15 +25,16 @@ However, some breaking changes have been made to better fit the ensemble backend
 
 - `pylc3.core.LC3State` -> `ensemble.core.Simulator`
 - A various number of functions have been renamed or removed:
+  - `LC3State::loadCode` -> `Simulator::load_code`
   - `LC3State::memory_read` -> `Simulator::read_mem`
   - `LC3State::memory_write` -> `Simulator::write_mem`
   - `LC3State::get_memory` -> `Simulator::get_mem`
   - `LC3State::set_memory` -> `Simulator::set_mem`
-  - `LC3State::get_r*`, `LC3State::get_register` -> `Simulator::get_reg`
-  - `LC3State::set_r*`, `LC3State::set_register` -> `Simulator::set_reg`
+  - `LC3State::get_register` -> `Simulator::get_reg`
+  - `LC3State::set_register` -> `Simulator::set_reg`
   - `LC3State::previous_line` -> `Simulator::prev_line`
   - `LC3State::add_symbol` -> `Simulator::add_label`
-  - `LC3State::delete_label` -> `Simulator::delete_label`
+  - `LC3State::delete_symbol` -> `Simulator::delete_label`
   - `LC3State::add_breakpoint` -> `Simulator::add_breakpoint_by_addr`, `Simulator::add_breakpoint_by_label`
   - `LC3State::add_watchpoint` -> `Simulator::add_watchpoint_by_reg_or_addr`, `Simulator::add_watchpoint_by_label`
   - `LC3State::add_blackbox` -> `Simulator::add_blackbox_by_addr`, `Simulator::add_blackbox_by_label`

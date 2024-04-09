@@ -1,20 +1,21 @@
 use std::collections::HashMap;
 
 use lc3_ensemble::asm::assemble_debug;
+use lc3_ensemble::ast::reg_consts::*;
 use lc3_ensemble::err::Error;
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
 use pyo3::{create_exception, prelude::*};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 
 /// LC-3 tester framework, built on [`lc3_ensemble`].
 #[pymodule]
 fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimulator>()?;
-    m.add_class::<Reg>()?;
     m.add("LoadError", py.get_type_bound::<LoadError>())?;
     m.add("SimError", py.get_type_bound::<SimError>())?;
+    m.add_class::<MemoryFillStrategy>()?;
     
     Ok(())
 }
@@ -22,50 +23,18 @@ fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 create_exception!(ensemble_test, LoadError, PyValueError);
 create_exception!(ensemble_test, SimError, PyValueError);
 
-/// A register number.
-/// 
-/// Used for [`Simulator::get_reg`] and [`Simulator::set_reg`].
-/// 
-/// [`Simulator::get_reg`]: [`PySimulator::get_reg`]
-/// [`Simulator::set_reg`]: [`PySimulator::set_reg`]
-#[derive(Clone, Copy)]
+/// Strategy to initialize the registers and memory.
 #[pyclass(module="ensemble_test")]
-enum Reg {
-    R0, R1, R2, R3, R4, R5, R6, R7
-}
-#[pymethods]
-impl Reg {
-    /// Creates a new register from an integer.
-    #[new]
-    fn new(n: u8) -> PyResult<Self> {
-        match n {
-            0 => Ok(Self::R0),
-            1 => Ok(Self::R1),
-            2 => Ok(Self::R2),
-            3 => Ok(Self::R3),
-            4 => Ok(Self::R4),
-            5 => Ok(Self::R5),
-            6 => Ok(Self::R6),
-            7 => Ok(Self::R7),
-            _ => Err(PyValueError::new_err(format!("register {n} out of bounds")))
-        }
-    }
-}
-impl From<Reg> for lc3_ensemble::ast::Reg {
-    fn from(value: Reg) -> Self {
-        use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
-
-        match value {
-            Reg::R0 => R0,
-            Reg::R1 => R1,
-            Reg::R2 => R2,
-            Reg::R3 => R3,
-            Reg::R4 => R4,
-            Reg::R5 => R5,
-            Reg::R6 => R6,
-            Reg::R7 => R7,
-        }
-    }
+enum MemoryFillStrategy {
+    /// Fill all of them with the same value.
+    #[pyo3(name="fill_with_value")]
+    FillWithValue,
+    /// Fill all of them from a given seed.
+    #[pyo3(name="single_random_value_fill")]
+    SingleRandomValueFill,
+    /// Seeded random.
+    #[pyo3(name="completely_random")]
+    CompletelyRandom
 }
 
 #[pyclass(name="Simulator", module="ensemble_test")]
@@ -205,12 +174,12 @@ impl PySimulator {
     }
 
     /// @see lc3_sym_lookup (ported from pylc3, may need to revise)
-    fn lookup(&mut self, label: &str) -> PyResult<u16> {
+    fn lookup(&self, label: &str) -> PyResult<u16> {
         todo!()
     }
 
     /// @see lc3_sym_rev_lookup (ported from pylc3, may need to revise)
-    fn reverse_lookup(&mut self, addr: u16) -> PyResult<&str> {
+    fn reverse_lookup(&self, addr: u16) -> PyResult<&str> {
         todo!()
     }
 
@@ -221,7 +190,7 @@ impl PySimulator {
     }
 
     /// @see lc3_sym_delete (ported from pylc3, may need to revise)
-    /// [ORIGINALLY LC3State::delete_label]
+    /// [ORIGINALLY LC3State::delete_symbol]
     fn delete_label(&mut self, label: &str) -> PyResult<()> {
         todo!()
     }
@@ -374,36 +343,171 @@ impl PySimulator {
         todo!()
     }
 
+    /// Gets the value stored at register R0.
+    /// 
+    /// This was originally `LC3State::get_r0` (the `r0` property) in complx's pylc3.
+    #[getter]
+    fn get_r0(&self) -> u16 {
+        self.sim.reg_file[R0].get()
+    }
+    
+    /// Gets the value stored at register R0.
+    /// 
+    /// This was originally `LC3State::set_r0` (the `r0` property) in complx's pylc3.
+    #[setter]
+    fn set_r0(&mut self, value: u16) {
+        self.sim.reg_file[R0].set(value)
+    }
+    
+    /// Gets the value stored at register R1.
+    /// 
+    /// This was originally `LC3State::get_r1` (the `r1` property) in complx's pylc3.
+    #[getter]
+    fn get_r1(&self) -> u16 {
+        self.sim.reg_file[R1].get()
+    }
+    
+    /// Gets the value stored at register R1.
+    /// 
+    /// This was originally `LC3State::set_r1` (the `r1` property) in complx's pylc3.
+    #[setter]
+    fn set_r1(&mut self, value: u16) {
+        self.sim.reg_file[R1].set(value)
+    }
+    
+    /// Gets the value stored at register R2.
+    /// 
+    /// This was originally `LC3State::get_r2` (the `r2` property) in complx's pylc3.
+    #[getter]
+    fn get_r2(&self) -> u16 {
+        self.sim.reg_file[R2].get()
+    }
+    
+    /// Gets the value stored at register R2.
+    /// 
+    /// This was originally `LC3State::set_r2` (the `r2` property) in complx's pylc3.
+    #[setter]
+    fn set_r2(&mut self, value: u16) {
+        self.sim.reg_file[R2].set(value)
+    }
+    
+    /// Gets the value stored at register R3.
+    /// 
+    /// This was originally `LC3State::get_r3` (the `r3` property) in complx's pylc3.
+    #[getter]
+    fn get_r3(&self) -> u16 {
+        self.sim.reg_file[R3].get()
+    }
+    
+    /// Gets the value stored at register R3.
+    /// 
+    /// This was originally `LC3State::set_r3` (the `r3` property) in complx's pylc3.
+    #[setter]
+    fn set_r3(&mut self, value: u16) {
+        self.sim.reg_file[R3].set(value)
+    }
+
+    /// Gets the value stored at register R4.
+    /// 
+    /// This was originally `LC3State::get_r4` (the `r4` property) in complx's pylc3.
+    #[getter]
+    fn get_r4(&self) -> u16 {
+        self.sim.reg_file[R4].get()
+    }
+    
+    /// Gets the value stored at register R4.
+    /// 
+    /// This was originally `LC3State::set_r4` (the `r4` property) in complx's pylc3.
+    #[setter]
+    fn set_r4(&mut self, value: u16) {
+        self.sim.reg_file[R4].set(value)
+    }
+    
+    /// Gets the value stored at register R5.
+    /// 
+    /// This was originally `LC3State::get_r5` (the `r5` property) in complx's pylc3.
+    #[getter]
+    fn get_r5(&self) -> u16 {
+        self.sim.reg_file[R5].get()
+    }
+    
+    /// Gets the value stored at register R5.
+    /// 
+    /// This was originally `LC3State::set_r5` (the `r5` property) in complx's pylc3.
+    #[setter]
+    fn set_r5(&mut self, value: u16) {
+        self.sim.reg_file[R5].set(value)
+    }
+    
+    /// Gets the value stored at register R6.
+    /// 
+    /// This was originally `LC3State::get_r6` (the `r6` property) in complx's pylc3.
+    #[getter]
+    fn get_r6(&self) -> u16 {
+        self.sim.reg_file[R6].get()
+    }
+    
+    /// Gets the value stored at register R6.
+    /// 
+    /// This was originally `LC3State::set_r6` (the `r6` property) in complx's pylc3.
+    #[setter]
+    fn set_r6(&mut self, value: u16) {
+        self.sim.reg_file[R6].set(value)
+    }
+    
+    /// Gets the value stored at register R7.
+    /// 
+    /// This was originally `LC3State::get_r7` (the `r7` property) in complx's pylc3.
+    #[getter]
+    fn get_r7(&self) -> u16 {
+        self.sim.reg_file[R7].get()
+    }
+    
+    /// Gets the value stored at register R7.
+    /// 
+    /// This was originally `LC3State::set_r7` (the `r7` property) in complx's pylc3.
+    #[setter]
+    fn set_r7(&mut self, value: u16) {
+        self.sim.reg_file[R7].set(value)
+    }
+    
     /// Gets the value stored at the provided register.
     /// 
-    /// This was originally the following functions in complx's pylc3:
-    /// - `LC3State::get_r0`
-    /// - `LC3State::get_r1`
-    /// - `LC3State::get_r2`
-    /// - `LC3State::get_r3`
-    /// - `LC3State::get_r4`
-    /// - `LC3State::get_r5`
-    /// - `LC3State::get_r6`
-    /// - `LC3State::get_r7`
-    /// - `LC3State::get_register`
-    fn get_reg(&self, index: Reg) -> u16 {
-        self.sim.reg_file[index.into()].get()
+    /// This was originally `LC3State::get_register` in complx's pylc3.
+    fn get_reg(&self, index: usize) -> PyResult<u16> {
+        let reg = match index {
+            0 => R0,
+            1 => R1,
+            2 => R2,
+            3 => R3,
+            4 => R4,
+            5 => R5,
+            6 => R6,
+            7 => R7,
+            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
+        };
+
+        Ok(self.sim.reg_file[reg].get())
     }
 
     /// Sets the value stored at the provided register.
     /// 
-    /// This was originally the following functions in complx's pylc3:
-    /// - `LC3State::set_r0`
-    /// - `LC3State::set_r1`
-    /// - `LC3State::set_r2`
-    /// - `LC3State::set_r3`
-    /// - `LC3State::set_r4`
-    /// - `LC3State::set_r5`
-    /// - `LC3State::set_r6`
-    /// - `LC3State::set_r7`
-    /// - `LC3State::set_register`
-    fn set_reg(&mut self, index: Reg, val: u16) {
-        self.sim.reg_file[index.into()].set(val)
+    /// This was originally `LC3State::set_register` in complx's pylc3.
+    fn set_reg(&mut self, index: usize, val: u16) -> PyResult<()> {
+        let reg = match index {
+            0 => R0,
+            1 => R1,
+            2 => R2,
+            3 => R3,
+            4 => R4,
+            5 => R5,
+            6 => R6,
+            7 => R7,
+            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
+        };
+
+        self.sim.reg_file[reg].set(val);
+        Ok(())
     }
 
     /// Gets the n condition code.
@@ -447,12 +551,15 @@ impl PySimulator {
     fn has_halted(&mut self) {
         todo!()
     }
-    fn get_executions(&mut self) -> u32 {
+
+    #[getter]
+    fn get_executions(&self) -> u32 {
         todo!()
     }
     
     /// @see lc3_state.memory_ops (ported from pylc3, may need to revise)
-    fn get_memory_ops(&mut self) -> HashMap<u16, (/* lc3_memory_stats */)> {
+    #[getter]
+    fn get_memory_ops(&self) -> HashMap<u16, (/* lc3_memory_stats */)> {
         todo!()
     }
 
@@ -461,21 +568,25 @@ impl PySimulator {
         todo!()
     }
 
-    fn get_breakpoints(&mut self) -> HashMap<u16, ( /* lc3_breakpoint_info& */ )> {
+    #[getter]
+    fn get_breakpoints(&self) -> HashMap<u16, ( /* lc3_breakpoint_info& */ )> {
         todo!()
     }
-    fn get_blackboxes(&mut self) -> HashMap<u16, ( /* lc3_blackbox_info& */ )> {
+    #[getter]
+    fn get_blackboxes(&self) -> HashMap<u16, ( /* lc3_blackbox_info& */ )> {
         todo!()
     }
-    fn get_memory_watchpoints(&mut self) -> HashMap<u16, ( /* lc3_watchpoint_info& */ )> {
+    #[getter]
+    fn get_memory_watchpoints(&self) -> HashMap<u16, ( /* lc3_watchpoint_info& */ )> {
         todo!()
     }
-    fn get_register_watchpoints(&mut self) -> HashMap<u16, ( /* lc3_watchpoint_info& */ )> {
+    #[getter]
+    fn get_register_watchpoints(&self) -> HashMap<u16, ( /* lc3_watchpoint_info& */ )> {
         todo!()
     }
 
     #[getter]
-    fn get_max_undo_stack_size(&mut self) -> u32 {
+    fn get_max_undo_stack_size(&self) -> u32 {
         todo!()
     }
     #[setter]
@@ -484,7 +595,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_max_call_stack_size(&mut self) -> u32 {
+    fn get_max_call_stack_size(&self) -> u32 {
         todo!()
     }
     #[setter]
@@ -493,7 +604,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_true_traps(&mut self) -> bool {
+    fn get_true_traps(&self) -> bool {
         todo!()
     }
     #[setter]
@@ -502,7 +613,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_lc3_version(&mut self) -> i32 {
+    fn get_lc3_version(&self) -> i32 {
         todo!()
     }
     #[setter]
@@ -511,7 +622,7 @@ impl PySimulator {
     }
     
     #[getter]
-    fn get_interrupts(&mut self) -> bool {
+    fn get_interrupts(&self) -> bool {
         todo!()
     }
     #[setter]
@@ -524,7 +635,7 @@ impl PySimulator {
     }
     
     #[getter]
-    fn get_keyboard_interrupt_delay(&mut self) -> u32 {
+    fn get_keyboard_interrupt_delay(&self) -> u32 {
         todo!()
     }
     #[setter]
@@ -533,7 +644,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_strict_execution(&mut self) -> bool {
+    fn get_strict_execution(&self) -> bool {
         todo!()
     }
     #[setter]
@@ -550,7 +661,7 @@ impl PySimulator {
 
     /// The following accessors are only meaningful if testing_mode was set (ported from pylc3, may need to revise)
     #[getter]
-    fn get_input(&mut self) -> &str {
+    fn get_input(&self) -> &str {
         todo!()
     }
     #[setter]
@@ -559,7 +670,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_output(&mut self) -> &str {
+    fn get_output(&self) -> &str {
         todo!()
     }
     #[setter]
@@ -568,7 +679,7 @@ impl PySimulator {
     }
 
     #[getter]
-    fn get_warnings(&mut self) -> &str {
+    fn get_warnings(&self) -> &str {
         todo!()
     }
     #[setter]
@@ -576,11 +687,10 @@ impl PySimulator {
         todo!()
     }
     
-
-    fn first_level_calls(&mut self) -> Vec<(/* lc3_subroutine_call_info */)> {
+    fn first_level_calls(&self) -> Vec<(/* lc3_subroutine_call_info */)> {
         todo!()
     }
-    fn first_level_traps(&mut self) -> Vec<(/* lc3_trap_call_info */)> {
+    fn first_level_traps(&self) -> Vec<(/* lc3_trap_call_info */)> {
         todo!()
     }
 }

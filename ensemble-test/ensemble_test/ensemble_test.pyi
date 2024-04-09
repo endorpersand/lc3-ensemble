@@ -1,5 +1,5 @@
 class Simulator:
-    def __new__(self): pass
+    def __new__(cls): pass
     def init(self, src_fp: str) -> None: pass
     def load(self,
         src_fp: str,
@@ -79,18 +79,9 @@ class Simulator:
     def random(self) -> int: pass
     def get_reg(self, index: int) -> int: pass
     def set_reg(self, index: int, val: int) -> None: pass
-    def get_n(self) -> bool: pass
-    def get_z(self) -> bool: pass
-    def get_p(self) -> bool: pass
     
     def has_halted(self) -> None: pass
-    def get_executions(self) -> int: pass
-    def get_memory_ops(self) -> dict[int, None]: pass
     def comment(self) -> str: pass
-    def get_breakpoints(self) -> dict[int, None]: pass
-    def get_blackboxes(self) -> dict[int, None]: pass
-    def get_memory_watchpoints(self) -> dict[int, None]: pass
-    def get_register_watchpoints(self) -> dict[int, None]: pass
     
     def setup_replay(self, file: str, replay_str: str) -> None: pass
     def describe_replay(self, replay_str: str) -> None: pass
@@ -100,9 +91,62 @@ class Simulator:
 
     # Simulator properties
     @property
+    def r0(self) -> int: pass
+    @r0.setter
+    def r0(self, value: int): pass
+    @property
+    def r1(self) -> int: pass
+    @r1.setter
+    def r1(self, value: int): pass
+    @property
+    def r2(self) -> int: pass
+    @r2.setter
+    def r2(self, value: int): pass
+    @property
+    def r3(self) -> int: pass
+    @r3.setter
+    def r3(self, value: int): pass
+    @property
+    def r4(self) -> int: pass
+    @r4.setter
+    def r4(self, value: int): pass
+    @property
+    def r5(self) -> int: pass
+    @r5.setter
+    def r5(self, value: int): pass
+    @property
+    def r6(self) -> int: pass
+    @r6.setter
+    def r6(self, value: int): pass
+    @property
+    def r7(self) -> int: pass
+    @r7.setter
+    def r7(self, value: int): pass
+
+    @property
+    def n(self) -> bool: pass
+    @property
+    def z(self) -> bool: pass
+    @property
+    def p(self) -> bool: pass
+
+    @property
     def pc(self) -> int: pass
     @pc.setter
     def pc(self, addr: int) -> None: pass
+
+    @property
+    def executions(self) -> int: pass
+    @property
+    def memory_ops(self) -> dict[int, None]: pass
+    @property
+    def breakpoints(self) -> dict[int, None]: pass
+    @property
+    def blackboxes(self) -> dict[int, None]: pass
+    @property
+    def memory_watchpoints(self) -> dict[int, None]: pass
+    @property
+    def register_watchpoints(self) -> dict[int, None]: pass
 
     @property
     def max_undo_stack_size(self) -> int: pass
@@ -155,18 +199,12 @@ class Simulator:
     @warnings.setter
     def warnings(self, warnings: str) -> None: pass
 
-class Reg:
-    def __new__(self, regno: int): pass
-    R0: Reg
-    R1: Reg
-    R2: Reg
-    R3: Reg
-    R4: Reg
-    R5: Reg
-    R6: Reg
-    R7: Reg
-
 class LoadError(ValueError):
     pass
 class SimError(ValueError):
     pass
+
+class MemoryFillStrategy:
+    fill_with_value: MemoryFillStrategy
+    single_random_value_fill: MemoryFillStrategy
+    completely_random: MemoryFillStrategy
