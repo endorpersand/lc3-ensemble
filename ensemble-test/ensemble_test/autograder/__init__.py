@@ -23,13 +23,14 @@ import enum
 import functools
 import io
 import json
+from typing import Any, Dict, List, Tuple, Union
+from typing_extensions import Any, Literal
 from .. import core
 import pathlib
 import re
 import struct
 import unittest
 import zlib
-
 
 DEFAULT_MAX_EXECUTIONS = 1000000
 REPLAY_STRING_VERSION_MAJOR = 1
@@ -272,18 +273,18 @@ class Preconditions(object):
     """
     def __init__(self):
         # Dict of PreconditionFlag to data.
-        self._environment_data = dict()
+        self._environment_data: Dict[int, Any] = dict()
         # List of Tuple (PreconditionFlag, string label, num_params, params)
-        self._precondition_data = []
+        self._precondition_data: List[Tuple[int, str, int, List[int]]] = []
 
-    def addPrecondition(self, type_id, label, data):
+    def addPrecondition(self, type_id: PreconditionFlag, label: str, data: Union[int, List[int]]):
         assert type_id.value > 15, 'Internal error, Precondition Flags are of id > 15'
         if isinstance(data, int):
             self._precondition_data.append((type_id.value, label, 1, [data]))
         else:
             self._precondition_data.append((type_id.value, label, len(data), data))
 
-    def addEnvironment(self, type_id, data):
+    def addEnvironment(self, type_id: PreconditionFlag, data):
         assert type_id.value <= 15, 'Internal error, Environment Precondition Flags are of id <= 15'
         self._environment_data[type_id.value] = data
 
@@ -296,7 +297,7 @@ class Preconditions(object):
         file.write(struct.pack('=B', 16))
 
         for id, label, num_params, params in self._precondition_data:
-            label = bytes(label)
+            label = label.encode("latin-1")
 
             file.write(struct.pack('=B', id))
             file.write(struct.pack('=I', len(label)))
@@ -330,14 +331,18 @@ class Postconditions(object):
         # List of (PostconditionFlag, 0, char bool)
         # List of (PostconditionFlag, 1, int val, num_params, params)
         # List of (PostconditionFlag, 2, string label, num_params, params)
-        self._data = []
+        self._data: List[Union[
+            Tuple[int, Literal[0], int, int, List[int]],
+            Tuple[int, Literal[1], int, int, List[int]],
+            Tuple[int, Literal[2], str, int, List[int]],
+        ]] = []
 
     def add(self, type_id, value, data=None):
         assert type_id.value <= 18, 'Internal error, Unknown Postcondition Flag.'
         if data is None:
             data = []
-        if value is True or value is False:
-            self._data.append((type_id.value, 0, 0 if value is False else 1, 0, None))
+        if isinstance(value, bool):
+            self._data.append((type_id.value, 0, int(value), 0, []))
         elif isinstance(value, int):
             self._data.append((type_id.value, 1, value, len(data), data))
         elif isinstance(value, str):
@@ -347,20 +352,23 @@ class Postconditions(object):
         file = io.BytesIO()
 
         self._data.sort(key = lambda x: x[0])
-        for id, type, value, num_params, params in self._data:
-            if type == 0:
+        for tup in self._data:
+            if tup[1] == 0:
+                id, type, value, num_params, params = tup
                 file.write(struct.pack('=B', id))
                 file.write(struct.pack('=B', type))
                 file.write(struct.pack('=I', value))
-            elif type == 1:
+            elif tup[1] == 1:
+                id, type, value, num_params, params = tup
                 file.write(struct.pack('=B', id))
                 file.write(struct.pack('=B', type))
                 file.write(struct.pack('=I', value))
                 file.write(struct.pack('=I', num_params))
                 params = [param & 0xFFFF for param in params]
                 file.write(struct.pack('=%dH' % num_params, *params))
-            elif type == 2:
-                value = bytes(value)
+            elif tup[1] == 2:
+                id, type, value, num_params, params = tup
+                value = value.encode("latin-1")
                 file.write(struct.pack('=B', id))
                 file.write(struct.pack('=B', type))
                 file.write(struct.pack('=I', len(value)))
