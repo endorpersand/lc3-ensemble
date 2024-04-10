@@ -23,8 +23,8 @@ import enum
 import functools
 import io
 import json
-from typing import Any, Dict, List, Tuple, Union
-from typing_extensions import Any, Literal
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing_extensions import Any, Literal, TypeAlias, TypedDict
 from .. import core
 import pathlib
 import re
@@ -392,8 +392,11 @@ class Postconditions(object):
         """Returns a encoded string with the data."""
         return self._formBlob()
 
+PassedAssertion: TypeAlias = str # name
+FailedAssertion: TypeAlias = Tuple[str, str] # name, error msg
+JsonReporter: TypeAlias = Callable[[str, Dict[str, List[PassedAssertion]], Dict[str, List[FailedAssertion]]], dict]
 
-def JsonExpandedOutputPerAssertion(name, passed_assertions, failed_assertions):
+def JsonExpandedOutputPerAssertion(name: str, passed_assertions: Dict[str, List[PassedAssertion]], failed_assertions: Dict[str, List[FailedAssertion]]) -> dict:
     """Function appropriate for setting cls.json_report_func.
 
     The format of the results.json file is as follows.
@@ -412,9 +415,10 @@ def JsonExpandedOutputPerAssertion(name, passed_assertions, failed_assertions):
     }
     """
     json_obj = {name: []}
-    tests = set()
+    tests: Set[str] = set()
     tests.update(list(failed_assertions.keys()))
     tests.update(list(passed_assertions.keys()))
+
     for test_name in tests:
         for check_name in passed_assertions.get(test_name, []):
             json_obj[name].append({'display-name': f'{test_name}/{check_name}', 'passed': True})
@@ -422,8 +426,7 @@ def JsonExpandedOutputPerAssertion(name, passed_assertions, failed_assertions):
             json_obj[name].append({'display-name': f'{test_name}/{check_name}', 'passed': False, 'message': msg})
     return {'results': json_obj}
 
-
-def JsonOutputPerAssertion(name, passed_assertions, failed_assertions):
+def JsonOutputPerAssertion(name: str, passed_assertions: Dict[str, List[PassedAssertion]], failed_assertions: Dict[str, List[FailedAssertion]]) -> dict:
     """Function appropriate for setting cls.json_report_func.
 
     The format of the results.json file is as follows.
@@ -445,9 +448,10 @@ def JsonOutputPerAssertion(name, passed_assertions, failed_assertions):
     }
     """
     check_data = {}
-    tests = set()
+    tests: Set[str] = set()
     tests.update(list(failed_assertions.keys()))
     tests.update(list(passed_assertions.keys()))
+
     for test_name in tests:
         for check_name in passed_assertions.get(test_name, []):
             assertion_name = f'{name} - {check_name}'
@@ -490,9 +494,9 @@ class LC3UnitTestCase(unittest.TestCase):
     and returns a map for json output see afforementioned functions for examples.
     """
 
-    failed_assertions_per_test = {}
-    passed_assertions_per_test = {}
-    json_report_func = None
+    failed_assertions_per_test: Dict[str, List[FailedAssertion]] = {}
+    passed_assertions_per_test: Dict[str, List[PassedAssertion]] = {}
+    json_report_func: Optional[JsonReporter] = None
 
     @classmethod
     def setUpClass(cls):
@@ -536,11 +540,11 @@ class LC3UnitTestCase(unittest.TestCase):
         # Subroutine specifications. Dict of String to List of interested registers. Only for SubroutineCallMode.pass_by_register.
         self._subroutine_call_mode = None
         self.subroutine_specifications = dict()
-        self.passed_assertions = []
-        self.failed_assertions = []
+        self.passed_assertions: list[PassedAssertion] = []
+        self.failed_assertions: list[FailedAssertion] = []
         self._hard_failed = False
         # Display name for JSON. This is required to be set.
-        self.display_name = None
+        self.display_name: Optional[str] = None
         # Set of labels that were modified as preconditions along with type
         self._modified_labels = dict()
         self._code_has_ran = False
@@ -551,11 +555,12 @@ class LC3UnitTestCase(unittest.TestCase):
     def tearDown(self):
         def form_failure_message():
             return 'The test failed due to the following assertions shown below:\n----\nTest case: %s\n----\n%s%s' % (self.display_name, '\n'.join(['Name: %s Reason: %s' % (name, msg) for name, msg in self.failed_assertions]), self.replay_msg)
+        
+        assert self.display_name is not None, 'Internal error self.display_name needs to be set per test case.'
         self.failed_assertions_per_test[self.display_name] = self.failed_assertions
         self.passed_assertions_per_test[self.display_name] = self.passed_assertions
         if self.failed_assertions:
             self.fail(form_failure_message())
-        assert self.display_name is not None, 'Internal error self.display_name needs to be set per test case.'
 
     def init(self, strategy, value):
         """Initializes LC3 state memory.
