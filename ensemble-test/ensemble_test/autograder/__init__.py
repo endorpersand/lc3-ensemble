@@ -520,7 +520,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
     def setUp(self):
         self.state = core.Simulator(testing_mode=True)
-        self.break_address = None
+        self.break_address: Optional[int] = None
         self.preconditions = Preconditions()
         self.postconditions = Postconditions()
         self.enable_plugins = False
@@ -562,7 +562,7 @@ class LC3UnitTestCase(unittest.TestCase):
         if self.failed_assertions:
             self.fail(form_failure_message())
 
-    def init(self, strategy, value):
+    def init(self, strategy: core.MemoryFillStrategy, value: int):
         """Initializes LC3 state memory.
 
         Args:
@@ -582,7 +582,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self.preconditions.addEnvironment(PreconditionFlag.memory_strategy, strategy)
         self.preconditions.addEnvironment(PreconditionFlag.memory_strategy_value, value)
 
-    def _internalAssert(self, name, cond, msg, level=AssertionType.soft, internal=False):
+    def _internalAssert(self, name: str, cond, msg: str, level=AssertionType.soft, internal=False):
         name = name if not internal else 'internal'
         if self._hard_failed:
             if name != 'internal':
@@ -599,7 +599,7 @@ class LC3UnitTestCase(unittest.TestCase):
             self.failed_assertions.append((name, '%s%s' % (msg, self.replay_msg)))
             self._hard_failed = self._hard_failed or level == AssertionType.hard
 
-    def loadAsmFile(self, filename, lc3_version=1):
+    def loadAsmFile(self, filename: str, lc3_version: int = 1):
         """Loads an assembly file.
 
         Will assert if the file failed to assemble.
@@ -620,10 +620,10 @@ class LC3UnitTestCase(unittest.TestCase):
         self.setLC3Version(lc3_version)
         self._internalSetFilename(filename)
     
-    def _internalSetFilename(self, filename):
+    def _internalSetFilename(self, filename: str):
         self.asm_filename = pathlib.Path(filename).name
 
-    def loadPattObjAndSymFile(self, obj_file, sym_file):
+    def loadPattObjAndSymFile(self, obj_file: str, sym_file: str):
         """Loads an assembled object and symbol table file.
 
         Note this function is only to be used on files assembled with the Patt/Patel's lc3tools.
@@ -652,7 +652,7 @@ class LC3UnitTestCase(unittest.TestCase):
                     self.state.add_label(symbol, location)
                 line = f.readline()
 
-    def _lookup(self, label):
+    def _lookup(self, label: str) -> int:
         """Gets the address of a label by looking it up in the symbol table.
 
         This will assert if the label is not found.
@@ -668,7 +668,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert('lookup %s' % label, addr != -1, "Label %s was not found in the assembly code." % label, AssertionType.fatal, internal=True)
         return _toUShort(addr)
 
-    def _reverse_lookup(self, address):
+    def _reverse_lookup(self, address: int) -> str:
         """Gets the label associated with address.
 
         This will assert if no label found at address.
@@ -684,7 +684,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert('reverse_lookup %x' % address, label, "Address %x is not associated with a label." % address, AssertionType.fatal, internal=True)
         return label
 
-    def _readMem(self, addr, unsigned=False):
+    def _readMem(self, addr: int, unsigned: bool = False) -> int:
         """Reads a value at a memory address.
 
         Args:
@@ -698,7 +698,7 @@ class LC3UnitTestCase(unittest.TestCase):
         value = self.state.get_mem(_toUShort(addr))
         return value if not unsigned else _toUShort(value)
 
-    def _writeMem(self, addr, value):
+    def _writeMem(self, addr: int, value: int):
         """Write a value to a memory address.
 
         Args:
@@ -708,7 +708,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.state.set_mem(_toUShort(addr), value)
 
-    def _readReg(self, reg, unsigned=False):
+    def _readReg(self, reg: int, unsigned: int = False) -> int:
         """Reads a value in a register.
 
         Args:
@@ -723,7 +723,7 @@ class LC3UnitTestCase(unittest.TestCase):
         value = self.state.get_reg(reg)
         return value if not unsigned else _toUShort(value)
 
-    def _writeReg(self, reg, value):
+    def _writeReg(self, reg: int, value: int):
         """Write a value to a register.
 
         Args:
@@ -806,7 +806,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert('readData', a == -1, 'Extra end of data segment found.', AssertionType.fatal, internal=True)
         return result
 
-    def setLC3Version(self, version):
+    def setLC3Version(self, version: int):
         """Sets the LC-3 Version.
 
         This function should be used to change the LC3 behavior.
@@ -819,7 +819,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self.state.lc3_version = version
         self.preconditions.addEnvironment(PreconditionFlag.lc3_version, version)
 
-    def setTrueTraps(self, setting):
+    def setTrueTraps(self, setting: bool):
         """Enables or disables True Traps.
 
         This should be called before loadXXX.
@@ -833,7 +833,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addEnvironment(PreconditionFlag.true_traps, setting)
 
-    def setInterrupts(self, setting):
+    def setInterrupts(self, setting: bool):
         """Enables or disables Interrupts.
 
         Args:
@@ -845,7 +845,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addEnvironment(PreconditionFlag.interrupts, setting)
 
-    def setKeyboardInterruptDelay(self, delay):
+    def setKeyboardInterruptDelay(self, delay: int):
         """Sets speed of which keyboard interrupts are generated.
 
         Args:
@@ -854,7 +854,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.state.keyboard_interrupt_delay = delay
 
-    def setPluginsEnabled(self, setting):
+    def setPluginsEnabled(self, setting: bool):
         """Enables or disables plugins.
 
         This should be called before loadXXX.
@@ -867,7 +867,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addEnvironment(PreconditionFlag.plugins, setting)
 
-    def setStrictExecution(self, setting):
+    def setStrictExecution(self, setting: bool):
         """Enables or disables strict execution mode.
 
         Executing invalid instructions will trigger an exception and halt the lc3state causing the test to fail.
@@ -880,7 +880,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addEnvironment(PreconditionFlag.strict_execution, setting)
 
-    def setRegister(self, register_number, value):
+    def setRegister(self, register_number: int, value: int):
         """Sets a Register.
 
         This exactly performs state.regs[register_number] = value
@@ -896,7 +896,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.register, str(register_number), value)
 
-    def setPc(self, value):
+    def setPc(self, value: int):
         """Sets the PC.
 
         This exactly performs state.pc = value
@@ -909,7 +909,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.pc, "", value)
 
-    def setValue(self, label, value):
+    def setValue(self, label: str, value: int):
         """Sets a value at a label.
 
         This exactly performs state.memory[label] = value.
@@ -930,7 +930,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.value, label, value)
 
-    def setPointer(self, label, value):
+    def setPointer(self, label: str, value: int):
         """Sets a value at an address pointed to by label
 
         This exactly performs state.memory[state.memory[label]] = value
@@ -952,7 +952,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.pointer, label, value)
 
-    def setArray(self, label, arr):
+    def setArray(self, label: str, arr: list[int]):
         """Sets a sequence of values starting at the address pointed to by label.
 
         This exactly performs:
@@ -979,7 +979,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.array, label, arr.copy())
 
-    def setString(self, label, text):
+    def setString(self, label: str, text: str):
         """Sets a sequence of characters followed by a NUL terminator starting at the address pointed to by label.
 
         This exactly performs:
@@ -1008,7 +1008,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.string, label, [ord(char) for char in text])
 
-    def setConsoleInput(self, input):
+    def setConsoleInput(self, input: str):
         """Sets console input for the test.
 
         Args:
@@ -1019,7 +1019,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.input, "", [ord(char) for char in input])
 
-    def callSubroutine(self, subroutine, params, r5=0xCAFE, r6=0xF000, r7=0x8000):
+    def callSubroutine(self, subroutine: str, params: Union[list[int], dict[int, int]], r5: int = 0xCAFE, r6: int = 0xF000, r7: int = 0x8000):
         """Sets the state to start executing a subroutine for the test.
 
         For lc-3 calling convention pass in a list of params.
@@ -1066,7 +1066,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
     # TODO Issue#134 Add callTrap, support both lc-3 and the 2019 revision.
 
-    def expectSubroutineCall(self, subroutine, params, optional=False):
+    def expectSubroutineCall(self, subroutine: str, params: Union[list[int], dict[int, int]], optional: bool = False):
         """Expects that a subroutine call was made with parameters.
 
         This function verifies only the first level of subroutine calls *not* all of them if the subroutine is recursive or calls other subroutines that call subroutines.
@@ -1122,7 +1122,7 @@ class LC3UnitTestCase(unittest.TestCase):
             data = list(functools.reduce(lambda a, b: a + b, list(params.items())))
             self.postconditions.add(PostconditionFlag.pass_by_regs, subroutine, data)
 
-    def expectTrapCall(self, vector, params, optional=False):
+    def expectTrapCall(self, vector: int, params: dict[int, int], optional: bool = False):
         """Expects that a trap was made with parameters in registers.
 
         Note that passing in the same (vector, params, optional) triplet is not supported. Nor is
@@ -1163,7 +1163,7 @@ class LC3UnitTestCase(unittest.TestCase):
             data = []
         self.postconditions.add(PostconditionFlag.pass_by_regs, 'x%02x' % vector, data)
 
-    def fillValue(self, address, value):
+    def fillValue(self, address: int, value: int):
         """Fills a value at an address.
 
         This exactly performs state.memory[address] = value.
@@ -1187,7 +1187,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.direct_set, '%04x' % address, value)
 
-    def fillString(self, address, text):
+    def fillString(self, address: int, text: str):
         """Sets a sequence of characters followed by a NUL terminator starting at the address given.
 
         This exactly performs:
@@ -1223,7 +1223,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.direct_string, '%04x' % address, [ord(c) for c in text])
 
-    def fillArray(self, address, arr):
+    def fillArray(self, address: int, arr: list[int]):
         """Sets a sequence of values starting at the address given.
 
         This exactly performs:
