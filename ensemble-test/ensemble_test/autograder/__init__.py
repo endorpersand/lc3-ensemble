@@ -23,8 +23,8 @@ import enum
 import functools
 import io
 import json
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-from typing_extensions import Any, Literal, TypeAlias, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union, cast
+from typing_extensions import Any, Literal, TypeAlias, TypeVar
 from .. import core
 import pathlib
 import re
@@ -36,6 +36,13 @@ DEFAULT_MAX_EXECUTIONS = 1000000
 REPLAY_STRING_VERSION_MAJOR = 1
 REPLAY_STRING_VERSION_MINOR = 0
 
+T = TypeVar("T")
+
+PassedAssertion: TypeAlias = str # name
+FailedAssertion: TypeAlias = Tuple[str, str] # name, error msg
+JsonReporter: TypeAlias = Callable[[str, Dict[str, List[PassedAssertion]], Dict[str, List[FailedAssertion]]], dict]
+
+NextInfo: TypeAlias = Union[None, int, List[int]]
 
 class LC3InternalAssertion(Exception):
     pass
@@ -392,10 +399,6 @@ class Postconditions(object):
         """Returns a encoded string with the data."""
         return self._formBlob()
 
-PassedAssertion: TypeAlias = str # name
-FailedAssertion: TypeAlias = Tuple[str, str] # name, error msg
-JsonReporter: TypeAlias = Callable[[str, Dict[str, List[PassedAssertion]], Dict[str, List[FailedAssertion]]], dict]
-
 def JsonExpandedOutputPerAssertion(name: str, passed_assertions: Dict[str, List[PassedAssertion]], failed_assertions: Dict[str, List[FailedAssertion]]) -> dict:
     """Function appropriate for setting cls.json_report_func.
 
@@ -582,7 +585,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self.preconditions.addEnvironment(PreconditionFlag.memory_strategy, strategy)
         self.preconditions.addEnvironment(PreconditionFlag.memory_strategy_value, value)
 
-    def _internalAssert(self, name: str, cond, msg: str, level=AssertionType.soft, internal=False):
+    def _internalAssert(self, name: str, cond: bool, msg: str, level=AssertionType.soft, internal=False):
         name = name if not internal else 'internal'
         if self._hard_failed:
             if name != 'internal':
@@ -681,7 +684,7 @@ class LC3UnitTestCase(unittest.TestCase):
         """
 
         label = self.state.reverse_lookup(_toUShort(address))
-        self._internalAssert('reverse_lookup %x' % address, label, "Address %x is not associated with a label." % address, AssertionType.fatal, internal=True)
+        self._internalAssert('reverse_lookup %x' % address, label is not None, "Address %x is not associated with a label." % address, AssertionType.fatal, internal=True)
         return label
 
     def _readMem(self, addr: int, unsigned: bool = False) -> int:
@@ -734,8 +737,8 @@ class LC3UnitTestCase(unittest.TestCase):
         self._internalAssert('writeReg %x' % reg, reg >= 0 and reg < 8, 'Invalid register number %d' % reg, AssertionType.fatal, internal=True)
         self.state.set_reg(reg, value)
 
-    def _writeData(self, address, data):
-        def _writeDataInternal(address, dataitems, index=0):
+    def _writeData(self, address: int, data):
+        def _writeDataInternal(address: int, dataitems, index=0):
             i = index
             while i < len(dataitems):
                 t = dataitems[i]
@@ -768,8 +771,8 @@ class LC3UnitTestCase(unittest.TestCase):
         a, b = _writeDataInternal(address, tuple_to_data(data))
         self._internalAssert('writeData', a == -1, 'Extra end of data segment found.', AssertionType.fatal, internal=True)
 
-    def _readData(self, address, data):
-        def _readDataInternal(address, dataspec, index=0):
+    def _readData(self, address: int, data):
+        def _readDataInternal(address: int, dataspec, index=0):
             i = index
             data = []
             while i < len(dataspec):
@@ -1177,7 +1180,7 @@ class LC3UnitTestCase(unittest.TestCase):
             address: Short - Address to set.
             value: Integer - Value to write at that address
         """
-        self._internalAssert('fillValue', self.asm_filename, 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
+        self._internalAssert('fillValue', bool(self.asm_filename), 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
         self._internalAssert('fillValue', not self._code_has_ran, 'Attempt to fill a memory address after the code has ran', AssertionType.fatal, internal=True)
 
         label = self.state.reverse_lookup(address)
@@ -1211,7 +1214,7 @@ class LC3UnitTestCase(unittest.TestCase):
         Raises:
             ValueError if the address has a label (use setString instead).
         """
-        self._internalAssert('fillString', self.asm_filename, 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
+        self._internalAssert('fillString', bool(self.asm_filename), 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
         self._internalAssert('fillString', not self._code_has_ran, 'Attempt to fill a memory address after the code has ran', AssertionType.fatal, internal=True)
 
         label = self.state.reverse_lookup(address)
@@ -1247,7 +1250,7 @@ class LC3UnitTestCase(unittest.TestCase):
             ValueError if the address has a label (use setArray instead).
         """
 
-        self._internalAssert('fillArray', self.asm_filename, 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
+        self._internalAssert('fillArray', bool(self.asm_filename), 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
         self._internalAssert('fillArray', not self._code_has_ran, 'Attempt to fill a memory address after the code has ran', AssertionType.fatal, internal=True)
 
         label = self.state.reverse_lookup(address)
@@ -1258,7 +1261,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.direct_array, '%04x' % address, arr.copy())
 
-    def fillNode(self, address, next, data):
+    def fillNode(self, address: int, next: NextInfo, data):
         """Sets a node in memory at the address given.
 
         This can fill nodes of arbitrary type: linked list nodes or n-ary tree nodes
@@ -1282,7 +1285,7 @@ class LC3UnitTestCase(unittest.TestCase):
             data: Tuple - Node data. (See fillData for a more detailed description on the tuple's contents.)
         """
 
-        self._internalAssert('fillNode', self.asm_filename, 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
+        self._internalAssert('fillNode', bool(self.asm_filename), 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
         self._internalAssert('fillNode', not self._code_has_ran, 'Attempt to fill a memory address after the code has ran', AssertionType.fatal, internal=True)
 
         label = self.state.reverse_lookup(address)
@@ -1308,7 +1311,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.node, '%04x' % address, _formDataPreconditions(node_data))
 
-    def fillData(self, address, data):
+    def fillData(self, address: int, data):
         """Sets an arbitrary data structure/struct/record at the address given.
 
         Argument data should contain a tuple with any of the following data types
@@ -1327,7 +1330,7 @@ class LC3UnitTestCase(unittest.TestCase):
             address: Short - Address to set.
             data: Tuple - Node data.
         """
-        self._internalAssert('fillData', self.asm_filename, 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
+        self._internalAssert('fillData', bool(self.asm_filename), 'Attempt to fill a memory address before student program was loaded', AssertionType.fatal, internal=True)
         self._internalAssert('fillData', not self._code_has_ran, 'Attempt to fill a memory address after the code has ran', AssertionType.fatal, internal=True)
 
         label = self.state.reverse_lookup(address)
@@ -1336,7 +1339,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.preconditions.addPrecondition(PreconditionFlag.data, '%04x' % address, _formDataPreconditions(data))
 
-    def _addSubroutineInfo(self, subroutine, num_params):
+    def _addSubroutineInfo(self, subroutine: str, num_params: int):
         """Adds metadata for a subroutine.
 
         You shouldn't have to call this directly as it is called via callSubroutine and expectSubroutineCall.
@@ -1362,17 +1365,17 @@ class LC3UnitTestCase(unittest.TestCase):
         self.state.run(max_executions)
         self.replay_msg = self.generateReplayMessage()
 
-    def _assertShortEqual(self, expected, actual, name, msg, level=AssertionType.soft, internal=False):
+    def _assertShortEqual(self, expected: int, actual: int, name: str, msg: str, level=AssertionType.soft, internal=False):
         """Helper to assert if two 16 bit values are equal."""
         self._internalAssertEqual(_toUShort(expected), _toUShort(actual), name, msg=msg, level=level, internal=internal)
 
-    def _assertEqual(self, expected, actual, name, msg, level=AssertionType.soft, internal=False):
+    def _assertEqual(self, expected: T, actual: T, name: str, msg: str, level=AssertionType.soft, internal=False):
         self._internalAssertEqual(expected, actual, name, msg=msg, level=level, internal=internal)
 
-    def _internalAssertEqual(self, expected, actual, name, msg, level=AssertionType.soft, internal=False):
+    def _internalAssertEqual(self, expected: T, actual: T, name: str, msg: str, level=AssertionType.soft, internal=False):
         self._internalAssert(name, expected == actual, msg=msg, level=level, internal=internal)
 
-    def assertReturned(self, name=None, level=AssertionType.hard):
+    def assertReturned(self, name: Optional[str] = None, level = AssertionType.hard):
         """Assert that the code successfully returned from a subroutine call.
 
         This is achieved by hitting the breakpoint set at r7 when callSubroutine was called.
@@ -1387,6 +1390,7 @@ class LC3UnitTestCase(unittest.TestCase):
         """
 
         self._internalAssert('assertReturned', self.break_address is not None, "self.assertReturned() should only be used when a previous call to self.callSubroutine() was made.", AssertionType.fatal, internal=True)
+
         instruction = self.state.disassemble(self.state.pc, 1)
         malformed = '*' in instruction
         failure_msg = 'Code did not return from subroutine correctly.\n'
@@ -1398,10 +1402,10 @@ class LC3UnitTestCase(unittest.TestCase):
             failure_msg += 'This was probably due to an infinite loop in the code.\n'
         failure_msg += 'This may indicate that your handling of the stack is incorrect or that R7 was clobbered.\n'
         failure_msg += 'PC: x%04x\nExecuted: %d instructions\nInstruction last on: %s\n' % (self.state.pc, self.state.executions, instruction)
-        self._assertShortEqual(self.state.pc, self.break_address, name or 'returned', failure_msg, level=level)
+        self._assertShortEqual(self.state.pc, cast(int, self.break_address), name or 'returned', failure_msg, level=level)
         self.postconditions.add(PostconditionFlag.end_state, False)
 
-    def assertHalted(self, name=None, level=AssertionType.hard):
+    def assertHalted(self, name: Optional[str] = None, level=AssertionType.hard):
         """Asserts that the LC3 has been halted normally.
 
         This is achieved by reaching a HALT statement or if true_traps is set and the MCR register's 15 bit is set.
@@ -1429,7 +1433,7 @@ class LC3UnitTestCase(unittest.TestCase):
             self._assertShortEqual(self.state.get_mem(self.state.pc), 0xF025, name or 'halted', failure_msg, level=level)
         self.postconditions.add(PostconditionFlag.end_state, True)
 
-    def assertNoWarnings(self, name=None, level=AssertionType.soft):
+    def assertNoWarnings(self, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that no warnings were reported during execution of the code.
 
         This function generates one assertion.
@@ -1442,7 +1446,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self._internalAssert(name or 'warnings', not self.state.warnings, 'Code generated warnings shown below:\n----\n%s' % self.state.warnings, level=level)
 
-    def assertRegister(self, register_number, value, name=None, level=AssertionType.soft):
+    def assertRegister(self, register_number: int, value: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a value at a label is a certain value.
 
         This exactly checks if state.memory[label] == value
@@ -1463,7 +1467,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or ('R%d' % register_number), 'R%d was expected to be (%d x%04x) but code produced (%d x%04x)\n' % (register_number, expected, _toUShort(expected), actual, _toUShort(actual)), level=level)
         self.postconditions.add(PostconditionFlag.register, register_number, [value])
 
-    def assertPc(self, value, name=None, level=AssertionType.soft):
+    def assertPc(self, value: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that the PC is a certain value.
 
         This exactly checks if state.pc == value
@@ -1482,7 +1486,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or 'PC', 'PC was expected to be x%04x but code produced x%04x\n' % (expected, actual), level)
         self.postconditions.add(PostconditionFlag.pc, 0, [value])
 
-    def assertValue(self, label, value, name=None, level=AssertionType.soft):
+    def assertValue(self, label: str, value: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a value at a label is a certain value.
 
         This exactly checks if state.memory[label] == value
@@ -1502,7 +1506,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or ('value: %s' % label), 'MEM[%s] was expected to be (%d x%04x) but code produced (%d x%04x)\n' % (label, expected, _toUShort(expected), actual, _toUShort(actual)), level=level)
         self.postconditions.add(PostconditionFlag.value, label, [value])
 
-    def assertPointer(self, label, value, name=None, level=AssertionType.soft):
+    def assertPointer(self, label: str, value: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a value at an address pointed to by label is a certain value.
 
         This exactly checks if state.memory[state.memory[label]] == value
@@ -1522,7 +1526,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or ('pointer: %s' % label), 'MEM[MEM[%s]] was expected to be (%d x%04x) but code produced (%d x%04x)\n' % (label, expected, _toUShort(expected), actual, _toUShort(actual)), level=level)
         self.postconditions.add(PostconditionFlag.pointer, label, [value])
 
-    def assertArray(self, label, arr, name=None, level=AssertionType.soft):
+    def assertArray(self, label: str, arr: List[int], name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a sequence of values starting at the address pointed to by label are certain values.
 
         This exactly checks if:
@@ -1548,7 +1552,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertEqual(arr, actual_arr, name or ('array: %s' % label), 'Sequence of values starting at MEM[%s] was expected to be %s but code produced %s\n' % (label, arr, actual_arr), level=level)
         self.postconditions.add(PostconditionFlag.array, label, arr.copy())
 
-    def assertString(self, label, text, name=None, level=AssertionType.soft):
+    def assertString(self, label: str, text: str, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that sequence of characters followed by a NUL terminator starting at the address pointed to by label are certain values.
 
         This exactly checks if:
@@ -1578,7 +1582,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertEqual(expected_str, actual_str, name or ('string: %s' % label), 'String of characters starting at MEM[%s] was expected to be %s but code produced %s\n' % (label, repr(''.join(expected_str)), repr(''.join(actual_str))), level=level)
         self.postconditions.add(PostconditionFlag.string, label, [ord(char) for char in text])
 
-    def assertConsoleOutput(self, output, name=None, level=AssertionType.soft):
+    def assertConsoleOutput(self, output: str, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that console output is a certain string.
 
         This function generates one assertion.
@@ -1595,7 +1599,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertEqual(expected, actual, name or 'console output', 'Console output was expected to be %s but code produced %s\n' % (repr(expected), repr(actual)), level=level)
         self.postconditions.add(PostconditionFlag.output, 0, [ord(char) for char in output])
 
-    def assertValueAt(self, address, value, name=None, level=AssertionType.soft):
+    def assertValueAt(self, address: int, value: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a value at an address is a certain value.
 
         This exactly checks if state.memory[address] == value
@@ -1620,7 +1624,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or ('valueAt: x%04x' % address), 'MEM[x%04x] was expected to be (%d x%04x) but code produced (%d x%04x)\n' % (address, expected, _toUShort(expected), actual, _toUShort(actual)), level=level)
         self.postconditions.add(PostconditionFlag.direct_value, '%04x' % address, [value])
 
-    def assertArrayAt(self, address, arr, name=None, level=AssertionType.soft):
+    def assertArrayAt(self, address: int, arr: List[int], name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a sequence of values starting at the address given are certain values.
 
         This exactly checks if:
@@ -1654,7 +1658,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertEqual(arr, actual_arr, name or ('arrayAt: x%04x' % start_addr), 'Sequence of values at MEM[x%04x] was expected to be %s but code produced %s\n' % (start_addr, arr, actual_arr), level=level)
         self.postconditions.add(PostconditionFlag.direct_array, '%04x' % start_addr, arr.copy())
 
-    def assertStringAt(self, address, text, name=None, level=AssertionType.soft):
+    def assertStringAt(self, address: int, text: str, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that sequence of characters followed by a NUL terminator starting at the address pointed to by label are certain values.
 
         This exactly checks if:
@@ -1692,7 +1696,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertEqual(expected_str, actual_str, name or ('stringAt: x%04x' % start_addr), 'String of characters at MEM[x%04x] was expected to be %s but code produced %s\n' % (start_addr, repr(''.join(expected_str)), repr(''.join(actual_str))), level=level)
         self.postconditions.add(PostconditionFlag.direct_string, '%04x' % start_addr, [ord(char) for char in text])
 
-    def assertNodeAt(self, address, next, data, name=None, level=AssertionType.soft):
+    def assertNodeAt(self, address: int, next: NextInfo, data, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that a node starting at the address given is a certain value
 
         This can check nodes of arbitrary type: linked list nodes or n-ary tree nodes
@@ -1766,14 +1770,14 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.postconditions.add(PostconditionFlag.node, '%04x' % address, _formDataPreconditions((next_info, data)))
 
-    def assertDataAt(self, address, data, name=None, level=AssertionType.soft):
+    def assertDataAt(self, address: int, data, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that an arbitrary data structure/struct/record starting at the address given is a certain value
 
         This function generates one assertion.
             dataAt: x<address> - Soft.
 
         Args:
-            address: - Address where the data is located
+            address: Short - Address where the data is located
             data: A collections.NamedTuple describing the data and its contents. See fillData for valid tuple information.
             name: String. Assertion name override.
             level: AssertionType. Assertion level override.
@@ -1796,7 +1800,7 @@ class LC3UnitTestCase(unittest.TestCase):
         assertDataHelper(expected, actual, data._fields)
         self.postconditions.add(PostconditionFlag.data, '%04x' %  address, _formDataPreconditions(data))
 
-    def assertReturnValue(self, answer, name=None, level=AssertionType.soft):
+    def assertReturnValue(self, answer: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that the correct answer was returned.
 
         This is for verifying that the lc3 calling convention postcondition that memory[r6] == answer
@@ -1815,7 +1819,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(expected, actual, name or 'return value', 'Return value was expected to be (%d x%04x) but code produced (%d x%04x)\n' % (expected, _toUShort(expected), actual, _toUShort(actual)), level=level)
         self.postconditions.add(PostconditionFlag.return_value, 0, [answer])
 
-    def assertRegistersUnchanged(self, registers=None, name=None, level=AssertionType.soft):
+    def assertRegistersUnchanged(self, registers: Optional[List[int]] = None, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that registers value are the same as the beginning of execution.
 
         This is for verifying that caller saved registers are not clobbered as part of the lc3 calling convention.
@@ -1842,7 +1846,7 @@ class LC3UnitTestCase(unittest.TestCase):
         bits = sum([1 << a for a in registers])
         self.postconditions.add(PostconditionFlag.registers_unchanged, bits, [original_values[reg] for reg in sorted(registers)])
 
-    def assertStackManaged(self, stack, return_address, old_frame_pointer, name=None, level=AssertionType.soft):
+    def assertStackManaged(self, stack: int, return_address: int, old_frame_pointer: int, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that the stack was managed correctly.
 
         This function should be called only for lc3 calling convention format subroutines.
@@ -1885,7 +1889,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self._assertShortEqual(old_frame_pointer, actual_old_frame_ptr, ofp_assertion_name, 'Expected old frame pointer x%04x not found on stack in correct location code produced x%04x\n' % (old_frame_pointer, actual_old_frame_ptr), level=level)
         self.postconditions.add(PostconditionFlag.calling_convention_followed, 0, [stack, return_address, old_frame_pointer])
 
-    def assertSubroutineCallsMade(self, name=None, level=AssertionType.soft):
+    def assertSubroutineCallsMade(self, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that the expected subroutine calls were made with no unexpected ones made.
 
         It is required to call expectSubroutineCall in order for this function to work. If it is
@@ -1970,7 +1974,7 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self._internalAssert(name or 'subroutine calls made', len(self.expected_subroutines) == len(made_calls) and not missing_calls and not unknown_calls, status_message, level=level)
 
-    def assertTrapCallsMade(self, name=None, level=AssertionType.soft):
+    def assertTrapCallsMade(self, name: Optional[str] = None, level=AssertionType.soft):
         """Asserts that the expected traps were called with no unexpected ones made.
 
         It is required to call expectTrapCall for this function to work. If it is
