@@ -5,7 +5,7 @@ use lc3_ensemble::ast::reg_consts::*;
 use lc3_ensemble::err::Error;
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
-use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
+use lc3_ensemble::sim::mem::{MemAccessCtx, Word};
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 
@@ -49,7 +49,7 @@ impl PySimulator {
     /// Constructs a new simulator in Python.
     #[new]
     fn constructor() -> Self {
-        PySimulator { sim: Simulator::new(WordCreateStrategy::Unseeded) }
+        PySimulator { sim: Simulator::new(Default::default()) }
     }
 
     // USED BY pylc3.autograder
@@ -57,7 +57,7 @@ impl PySimulator {
 
     /// Initializes simulator's state.
     fn init(&mut self, src_fp: &str) -> PyResult<()> {
-        self.sim = Simulator::new(WordCreateStrategy::Unseeded);
+        self.sim = Simulator::new(Default::default());
         
         let src = std::fs::read_to_string(src_fp)?;
         let ast = parse_ast(&src)
