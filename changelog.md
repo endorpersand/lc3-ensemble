@@ -1,3 +1,7 @@
+# 0.2.1 (April 29, 2024)
+
+- Lower the Rust MSRV to 1.70 (from 1.77).
+
 # 0.2.0 (April 24, 2024)
 
 - Move Simulator configuration flags into `sim::SimFlags`
