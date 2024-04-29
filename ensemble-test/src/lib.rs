@@ -5,6 +5,15 @@ use lc3_ensemble::sim::Simulator;
 use pyo3::prelude::*;
 use pyo3::exceptions::PyIndexError;
 
+/// A LC-3 simulator and unit tester, backed by [`lc3-ensemble`].
+#[pymodule]
+fn ensemble_test(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySimulator>()?;
+    
+    Ok(())
+}
+
+
 #[pyclass(name="Simulator")]
 struct PySimulator {
     sim: Simulator,
@@ -50,12 +59,4 @@ impl PySimulator {
     fn get_memory(&mut self, address: u16) -> PyResult<u16>{
         Ok(self.sim.mem.get_raw(address).get())
     }
-}
-
-/// A Python module implemented in Rust.
-#[pymodule]
-fn ensemble_test(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<PySimulator>()?;
-    //m.add_function(wrap_pyfunction!(load_source, m)?)?;
-    Ok(())
 }
