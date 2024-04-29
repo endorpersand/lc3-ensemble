@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use lc3_ensemble::asm::{assemble, assemble_debug, ObjectFile};
 use lc3_ensemble::err::ErrSpan;
 use lc3_ensemble::parse::parse_ast;
-use lc3_ensemble::sim::{SimErr, Simulator};
+use lc3_ensemble::sim::{SimErr, SimFlags, Simulator};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -90,7 +90,10 @@ fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
     let mut sim = Simulator::new(Default::default());
     sim.load_os();
     sim.load_obj_file(&obj);
-    sim.strict = strict;
+    sim.flags = SimFlags {
+        strict,
+        ..Default::default()
+    };
 
     sim.run()
         .map_err(|e| ReportSimErr::new(&sim, &obj, e))

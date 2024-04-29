@@ -6,7 +6,7 @@
 //! - [`RegFile`]: The register file.
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 
 use crate::ast::Reg;
 
@@ -57,62 +57,39 @@ pub struct Word {
 const NO_BITS:  u16 = 0;
 const ALL_BITS: u16 = 1u16.wrapping_neg();
 
-/// Strategies to create a new uninitialized Word.
+/// Trait that describes types that can be used to create the data for an uninitialized [`Word`].
 /// 
-/// This is used as a parameter in [`Word::new_uninit`] to describe how a newly uninitialized `Word` is created.
-#[derive(Debug, Default)]
-pub enum WordCreateStrategy {
-    /// Initializes each word randomly and non-deterministically.
-    #[default]
-    Unseeded,
-
-    /// Initializes each word randomly and deterministically.
-    /// 
-    /// This can be created readily with [`WordCreateStrategy::seeded`].
-    Seeded {
-        /// The seed the RNG was initialized with.
-        seed: u64,
-        /// The RNG.
-        rand: Box<StdRng>
-    },
-
-    /// Initializes each word to a known value.
-    Known(u16)
+/// This is used with [`Word::new_uninit`] to create uninitialized Words.
+pub trait WordFiller {
+    /// Generate the data.
+    fn generate(&mut self) -> u16;
 }
-impl WordCreateStrategy {
-    /// Creates a word creation strategy that relies on a deterministic, seeded random number generator.
-    /// 
-    /// The produced words from this strategy should be consistent as long as the version of `rand` stays consistent.
-    pub fn seeded(seed: u64) -> Self {
-        WordCreateStrategy::Seeded {
-            seed,
-            rand: Box::new(StdRng::seed_from_u64(seed)),
-        }
-    }
-
+impl WordFiller for () {
+    /// This creates unseeded, non-deterministic values.
     fn generate(&mut self) -> u16 {
-        match self {
-            WordCreateStrategy::Unseeded => rand::random(),
-            WordCreateStrategy::Seeded { rand, .. } => rand.gen(),
-            WordCreateStrategy::Known(k) => *k,
-        }
+        rand::random()
     }
-
-    /// Resets the state of this word creation strategy.
-    pub fn reset(&mut self) {
-        match self {
-            WordCreateStrategy::Unseeded => { /* nothing */ },
-            WordCreateStrategy::Seeded { seed, rand } => **rand = StdRng::seed_from_u64(*seed),
-            WordCreateStrategy::Known(_) => { /* nothing */ },
-        }
+}
+impl WordFiller for u16 {
+    /// Sets each word to the given value.
+    fn generate(&mut self) -> u16 {
+        *self
+    }
+}
+impl WordFiller for StdRng {
+    /// This creates values from the standard random number generator.
+    /// 
+    /// This can be used to create deterministic, seeded values.
+    fn generate(&mut self) -> u16 {
+        self.gen()
     }
 }
 
 impl Word {
     /// Creates a new word that is considered uninitialized.
-    pub fn new_uninit(strat: &mut WordCreateStrategy) -> Self {
+    pub fn new_uninit(fill: &mut impl WordFiller) -> Self {
         Self {
-            data: strat.generate(),
+            data: fill.generate(),
             init: NO_BITS,
         }
     }
@@ -376,9 +353,9 @@ pub struct Mem {
 }
 impl Mem {
     /// Creates a new memory with a provided word creation strategy.
-    pub fn new(strat: &mut WordCreateStrategy) -> Self {
+    pub fn new(filler: &mut impl WordFiller) -> Self {
         Self {
-            data: std::iter::repeat_with(|| Word::new_uninit(strat))
+            data: std::iter::repeat_with(|| Word::new_uninit(filler))
                 .take(N)
                 .collect::<Box<_>>()
                 .try_into()
@@ -391,8 +368,29 @@ impl Mem {
     pub fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
         let mem = &mut self.data;
 
+        // chunk_by was added in Rust 1.77
+        struct ChunkBy<'s, T, F>(&'s [T], F);
+        impl<'s, T, F: FnMut(&T, &T) -> bool> Iterator for ChunkBy<'s, T, F> {
+            type Item = &'s [T];
+        
+            fn next(&mut self) -> Option<Self::Item> {
+                let (first, rest) = self.0.split_first()?;
+
+                // find the first element that doesn't match pred (+1 for the first el that was removed)
+                let pos = match rest.iter().position(|n| !(self.1)(first, n)) {
+                    Some(i) => i + 1,
+                    None => self.0.len(),
+                };
+
+                let (chunk, rest) = self.0.split_at(pos);
+
+                self.0 = rest;
+                Some(chunk)
+            }
+        }
+
         // separate data into chunks of initialized/uninitialized
-        for chunk in data.chunk_by(|a, b| a.is_some() == b.is_some()) {
+        for chunk in ChunkBy(data, |a: &Option<_>, b: &Option<_>| a.is_some() == b.is_some()) {
             let end = start.wrapping_add(chunk.len() as u16);
 
             let si = usize::from(start);
@@ -523,8 +521,8 @@ impl Mem {
 pub struct RegFile([Word; 8]);
 impl RegFile {
     /// Creates a register file with uninitialized data.
-    pub fn new(strat: &mut WordCreateStrategy) -> Self {
-        Self(std::array::from_fn(|_| Word::new_uninit(strat)))
+    pub fn new(filler: &mut impl WordFiller) -> Self {
+        Self(std::array::from_fn(|_| Word::new_uninit(filler)))
     }
 }
 impl std::ops::Index<Reg> for RegFile {
