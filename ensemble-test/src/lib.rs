@@ -2,7 +2,6 @@ use lc3_ensemble::asm::assemble_debug;
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::Simulator;
-use lc3_ensemble::sim::mem::MemAccessCtx;
 use pyo3::prelude::*;
 use pyo3::exceptions::PyIndexError;
 
@@ -15,11 +14,11 @@ struct PySimulator {
 impl PySimulator {
     #[new]
     fn constructor() -> Self {
-        PySimulator { sim: Simulator::new() }
+        PySimulator { sim: Simulator::new(Default::default()) }
     }
 
     fn init(&mut self, src_fp: &str) -> PyResult<()> {
-        self.sim = Simulator::new();
+        self.sim = Simulator::new(Default::default());
         
         let src = std::fs::read_to_string(src_fp)?;
         let ast = parse_ast(&src).unwrap();
@@ -49,7 +48,7 @@ impl PySimulator {
     }
 
     fn get_memory(&mut self, address: u16) -> PyResult<u16>{
-        Ok(self.sim.mem.get(address, MemAccessCtx { privileged: true, strict: false }).unwrap().get())
+        Ok(self.sim.mem.get_raw(address).get())
     }
 }
 

@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.20.0"
-lc3-ensemble = { version = "0.1.0", path = "../" }
+lc3-ensemble = "0.2.1"
