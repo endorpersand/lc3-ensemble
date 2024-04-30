@@ -96,7 +96,7 @@ pub enum AsmInstr {
     /// and then unconditionally jumping to the location stored in the given register (`BR`).
     /// 
     /// # Syntax
-    /// - `JSR BR`
+    /// - `JSRR BR`
     JSRR(Reg),
     
     /// A LD instruction.

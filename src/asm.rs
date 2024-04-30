@@ -178,11 +178,38 @@ impl crate::err::Error for AsmErr {
     }
 }
 
-/// A symbol table that maps source line numbers to memory addresses.
+/// A mapping from line numbers to memory addresses (and vice-versa).
+///
+/// This is implemented as a sorted list of contiguous blocks, consisting of:
+/// - The first source line number of the block, and
+/// - The memory addresses of the block
+/// 
+/// For example,
+/// ```text
+/// 0 | .orig x3000
+/// 1 |     AND R0, R0, #0
+/// 2 |     ADD R0, R0, #5
+/// 3 |     HALT
+/// 4 | .end
+/// 5 | 
+/// 6 | .orig x4000
+/// 7 |     .blkw 5
+/// 8 |     .fill x9F9F
+/// 9 | .end
+/// ```
+/// maps to `LineSymbolMap([(1, [0x3000, 0x3001, 0x3002]), (7, [0x4000, 0x4005])])`.
 struct LineSymbolMap(Vec<(usize, Vec<u16>)>);
 
 impl LineSymbolMap {
     /// Creates a new line symbol table.
+    /// 
+    /// This takes an expanded list of line-memory address mappings and condenses it into 
+    /// the internal [`LineSymbolMap`] format.
+    /// 
+    /// For example,
+    /// 
+    /// `[None, Some(0x3000), Some(0x3001), Some(0x3002), None, None, None, Some(0x4000), Some(0x4005)]` 
+    /// condenses to `[(1, [0x3000, 0x3001, 0x3002]), (7, [0x4000, 0x4005])]`.
     fn new(lines: Vec<Option<u16>>) -> Self {
         let mut blocks = vec![];
         let mut current = None;
@@ -198,10 +225,11 @@ impl LineSymbolMap {
         Self(blocks)
     }
 
-    /// Gets the memory address associated with this line, if it is present in the symbol table.
+    /// Gets the memory address associated with this line, if it is present in the line symbol mapping.
     fn get(&self, line: usize) -> Option<u16> {
         use std::cmp::Ordering;
 
+        // Find the block such that `line` falls within the source line number range of the block.
         let index = self.0.binary_search_by(|(start, words)| {
             match *start <= line {
                 false => Ordering::Less,
@@ -212,6 +240,7 @@ impl LineSymbolMap {
             }
         }).ok()?;
 
+        // Access the memory address.
         let (start, block) = &self.0[index];
         block.get(line - *start).copied()
     }
@@ -220,6 +249,8 @@ impl LineSymbolMap {
     fn find(&self, addr: u16) -> Option<usize> {
         self.0.iter()
             .find_map(|(start, words)| {
+                // Find the block that contains the given address,
+                // and then find the line index once it's found.
                 words.binary_search(&addr)
                     .ok()
                     .map(|o| start + o)
@@ -237,7 +268,8 @@ impl LineSymbolMap {
     }
 }
 
-/// Details some encoding information about the source.
+/// Struct holding the source string and contains helpers 
+/// to index lines and to query position information from a source string.
 pub struct SourceInfo {
     /// The source code.
     src: String,
@@ -298,8 +330,10 @@ impl SourceInfo {
     }
 
     /// Reads a line from source.
+    /// 
+    /// This returns None if line is not in the interval `[0, number of lines)`.
     pub fn read_line(&self, line: usize) -> Option<&str> {
-        Some(&self.src[self.line_span(line)?])
+        self.line_span(line).map(|r| &self.src[r])
     }
 
     /// Calculates the line and character number for a given character index.
@@ -325,6 +359,14 @@ impl SourceInfo {
 /// - A mapping from source code labels to memory addresses.
 /// - A mapping from source code line numbers to memory addresses (if debug symbols are enabled, see [`SymbolTable::new`]).
 /// - The source text (if debug symbols are enabled, see [`SymbolTable::new`]).
+/// 
+/// Here is a table of the mappings that the symbol table provides:
+/// 
+/// | from ↓, to → | label | memory address             | source line/span                   |
+/// |----------------|-------|----------------------------|------------------------------------|
+/// | label          | -     | [`SymbolTable::get_label`] | [`SymbolTable::find_label_source`] |
+/// | memory address | none  | -                          | [`SymbolTable::find_line_source`]  |
+/// | source line    | none  | [`SymbolTable::get_line`]  | -                                  |
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, (u16, usize)>,

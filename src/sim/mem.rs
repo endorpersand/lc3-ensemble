@@ -47,7 +47,7 @@ use super::{IODevice, SimErr, SimIO};
 /// When a `Word` is created for memory/register files (i.e., via [`Word::new_uninit`]), 
 /// it is created with the initialization bits set to fully uninitialized.
 /// The data associated with this `Word` is decided by the creation strategy 
-/// (see [`WordCreateStrategy`] for details).
+/// (see [`super::WordCreateStrategy`] for details).
 #[derive(Debug, Clone, Copy)]
 pub struct Word {
     data: u16,
