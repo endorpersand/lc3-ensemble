@@ -47,7 +47,7 @@ enum BreakpointLocation {
     Address(u16),
     Label(String)
 }
-#[pyclass(name="Simulator")]
+#[pyclass(name="Simulator", module="ensemble_test")]
 struct PySimulator {
     sim: Simulator,
     obj: Option<ObjectFile>
