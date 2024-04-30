@@ -362,11 +362,11 @@ impl SourceInfo {
 /// 
 /// Here is a table of the mappings that the symbol table provides:
 /// 
-/// | from ↓, to → | label | memory address             | source line/span                   |
-/// |----------------|-------|----------------------------|------------------------------------|
-/// | label          | -     | [`SymbolTable::get_label`] | [`SymbolTable::find_label_source`] |
-/// | memory address | none  | -                          | [`SymbolTable::find_line_source`]  |
-/// | source line    | none  | [`SymbolTable::get_line`]  | -                                  |
+/// | from ↓, to → | label                              | memory address                | source line/span                  |
+/// |----------------|------------------------------------|-------------------------------|-----------------------------------|
+/// | label          | -                                  | [`SymbolTable::lookup_label`] | [`SymbolTable::get_label_source`] |
+/// | memory address | [`SymbolTable::rev_lookup_label`]  | -                             | [`SymbolTable::rev_lookup_line`]  |
+/// | source line    | none                               | [`SymbolTable::lookup_line`]  | -                                 |
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, (u16, usize)>,
@@ -490,26 +490,28 @@ impl SymbolTable {
     }
 
     /// Gets the memory address of a given label (if it exists).
-    pub fn get_label(&self, label: &str) -> Option<u16> {
+    pub fn lookup_label(&self, label: &str) -> Option<u16> {
         self.label_map.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 
-    /// Gets the source span of a given label (if it exists).
-    pub fn find_label_source(&self, label: &str) -> Option<Range<usize>> {
-        let &(_, start) = self.label_map.get(label)?;
-        Some(start..(start + label.len()))
+    /// Gets the label at a given memory address (if it exists).
+    pub fn rev_lookup_label(&self, addr: u16) -> Option<&str> {
+        let (label, _) = self.label_map.iter()
+            .find(|&(_, (label_addr, _))| label_addr == &addr)?;
+
+        Some(label)
     }
 
-    /// Gets an iterable of the mapping from labels to addresses.
-    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
-        self.label_map.iter()
-            .map(|(label, &(addr, _))| (&**label, addr))
+    /// Gets the source span of a given label (if it exists).
+    pub fn get_label_source(&self, label: &str) -> Option<Range<usize>> {
+        let &(_, start) = self.label_map.get(label)?;
+        Some(start..(start + label.len()))
     }
 
     /// Gets the address of a given source line.
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
-    pub fn get_line(&self, line: usize) -> Option<u16> {
+    pub fn lookup_line(&self, line: usize) -> Option<u16> {
         self.line_map.get(line)
     }
 
@@ -519,13 +521,19 @@ impl SymbolTable {
     /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
-    pub fn find_line_source(&self, addr: u16) -> Option<usize> {
+    pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
         self.line_map.find(addr)
     }
 
     /// Reads the source info from this symbol table (if debug symbols are enabled).
     pub fn source_info(&self) -> Option<&SourceInfo> {
         self.src_info.as_ref()
+    }
+
+    /// Gets an iterable of the mapping from labels to addresses.
+    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
+        self.label_map.iter()
+            .map(|(label, &(addr, _))| (&**label, addr))
     }
 }
 impl std::fmt::Debug for SymbolTable {
@@ -574,7 +582,7 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.get_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
+            let Some(loc) = sym.lookup_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
             IOffset::new(loc.wrapping_sub(lc) as i16)
                 .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
         },
@@ -636,7 +644,7 @@ impl Directive {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
                     PCOffset::Label(l)  => {
-                        labels.get_label(&l.name)
+                        labels.lookup_label(&l.name)
                             .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
                     },
                 };
