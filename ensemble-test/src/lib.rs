@@ -1,7 +1,9 @@
-use lc3_ensemble::asm::assemble_debug;
+use lc3_ensemble::asm::{assemble_debug, ObjectFile};
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
-use lc3_ensemble::sim::Simulator;
+use lc3_ensemble::sim::debug::{Breakpoint, Comparator};
+use lc3_ensemble::sim::mem::{MemAccessCtx, Word};
+use lc3_ensemble::sim::{SimErr, Simulator};
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 
@@ -34,6 +36,11 @@ impl LoadError {
         LoadError::new_err(ErrDisplay(&e).to_string())
     }
 }
+impl SimError {
+    fn from_lc3_err(e: SimErr, pc: u16) -> PyErr {
+        SimError::new_err(format!("{e} (PC: x{:04X})", pc))
+    }
+}
 
 #[derive(FromPyObject)]
 enum BreakpointLocation {
@@ -43,124 +50,191 @@ enum BreakpointLocation {
 #[pyclass(name="Simulator")]
 struct PySimulator {
     sim: Simulator,
+    obj: Option<ObjectFile>
 }
 
 #[pymethods]
 impl PySimulator {
     #[new]
     fn constructor() -> Self {
-        PySimulator { sim: Simulator::new(Default::default()) }
+        Self {
+            sim: Simulator::new(Default::default()),
+            obj: None
+        }
     }
 
     fn load_file(&mut self, src_fp: &str) -> PyResult<()> {
-        todo!()
+        self.sim.reset();
+        self.obj.take();
+
+        let src = std::fs::read_to_string(src_fp)?;
+        let ast = parse_ast(&src)
+            .map_err(LoadError::from_lc3_err)?;
+        let obj = assemble_debug(ast, &src)
+            .map_err(LoadError::from_lc3_err)?;
+        
+        self.sim.load_obj_file(&obj);
+        self.obj.replace(obj);
+        Ok(())
     }
     fn load_code(&mut self, src: &str) -> PyResult<()> {
-        todo!()
+        self.sim.reset();
+        self.obj.take();
+
+        let ast = parse_ast(src)
+            .map_err(LoadError::from_lc3_err)?;
+        let obj = assemble_debug(ast, src)
+            .map_err(LoadError::from_lc3_err)?;
+        
+        self.sim.load_obj_file(&obj);
+        Ok(())
     }
 
     fn run(&mut self, limit: Option<u64>) -> PyResult<()> {
-        todo!()
+        let result = if let Some(lim) = limit {
+            self.sim.run_with_limit(lim)
+        } else {
+            self.sim.run()
+        };
+
+        result
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
     }
     fn step_in(&mut self) -> PyResult<()> {
-        todo!()
+        self.sim.step_in()
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
     }
     fn step_out(&mut self) -> PyResult<()> {
-        todo!()
+        self.sim.step_out()
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
     }
     fn step_over(&mut self) -> PyResult<()> {
-        todo!()
-    }
-
+        self.sim.step_over()
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
+        }
+        
     fn read_mem(&mut self, addr: u16) -> PyResult<u16> {
-        todo!()
+        let word = self.sim.mem.read(addr, MemAccessCtx { privileged: true, strict: false })
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))?;
+
+        Ok(word.get())
     }
     fn write_mem(&mut self, addr: u16, val: u16) -> PyResult<()> {
-        todo!()
+        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged: true, strict: false })
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
     }
     fn get_mem(&self, addr: u16) -> u16 {
-        todo!()
+        self.sim.mem.get_raw(addr).get()
     }
     fn set_mem(&mut self, addr: u16, val: u16) {
-        todo!()
+        self.sim.mem.get_raw_mut(addr).set(val);
     }
 
     #[getter]
     fn get_r0(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R0].get()
     }
     #[setter]
     fn set_r0(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R0].set(value)
     }
     #[getter]
     fn get_r1(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R1].get()
     }
     #[setter]
     fn set_r1(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R1].set(value)
     }
     #[getter]
     fn get_r2(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R2].get()
     }
     #[setter]
     fn set_r2(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R2].set(value)
     }
     #[getter]
     fn get_r3(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R3].get()
     }
     #[setter]
     fn set_r3(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R3].set(value)
     }
     #[getter]
     fn get_r4(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R4].get()
     }
     #[setter]
     fn set_r4(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R4].set(value)
     }
     #[getter]
     fn get_r5(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R5].get()
     }
     #[setter]
     fn set_r5(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R5].set(value)
     }
     #[getter]
     fn get_r6(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R6].get()
     }
     #[setter]
     fn set_r6(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R6].set(value)
     }
     #[getter]
     fn get_r7(&self) -> u16 {
-        todo!()
+        self.sim.reg_file[R7].get()
     }
     #[setter]
     fn set_r7(&mut self, value: u16) {
-        todo!()
+        self.sim.reg_file[R7].set(value)
     }
     fn get_reg(&self, index: usize) -> PyResult<u16> {
-        todo!()
+        let reg = match index {
+            0 => R0,
+            1 => R1,
+            2 => R2,
+            3 => R3,
+            4 => R4,
+            5 => R5,
+            6 => R6,
+            7 => R7,
+            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
+        };
+
+        Ok(self.sim.reg_file[reg].get())
     }
     fn set_reg(&mut self, index: usize, val: u16) -> PyResult<()> {
-        todo!()
+        let reg = match index {
+            0 => R0,
+            1 => R1,
+            2 => R2,
+            3 => R3,
+            4 => R4,
+            5 => R5,
+            6 => R6,
+            7 => R7,
+            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
+        };
+
+        self.sim.reg_file[reg].set(val);
+        Ok(())
     }
 
     fn lookup(&self, label: &str) -> Option<u16> {
-        todo!()
+        self.obj.as_ref()?.symbol_table()?.get_label(label)
     }
     fn reverse_lookup(&self, addr: u16) -> Option<&str> {
-        todo!()
+        // TODO: more efficient label access
+        let (label, _) = self.obj.as_ref()?.symbol_table()?.label_iter()
+            .find(|&(_, a)| a == addr)?;
+
+        Some(label)
     }
     fn add_label(&mut self, label: &str, addr: u16) -> bool {
         todo!()
@@ -170,10 +244,29 @@ impl PySimulator {
     }
 
     fn add_breakpoint(&mut self, break_loc: BreakpointLocation) {
-        todo!()
+        let m_addr = match break_loc {
+            BreakpointLocation::Address(addr) => Some(addr),
+            BreakpointLocation::Label(label)  => self.lookup(&label),
+        };
+
+        // TODO: error if label not found?
+        if let Some(addr) = m_addr {
+            self.sim.breakpoints.push(Breakpoint::PC(Comparator::eq(addr)));
+        }
     }
     fn remove_breakpoint(&mut self, break_loc: BreakpointLocation) {
-        todo!()
+        let m_addr = match break_loc {
+            BreakpointLocation::Address(addr) => Some(addr),
+            BreakpointLocation::Label(label)  => self.lookup(&label),
+        };
+    
+        // TODO: error if label not found?
+        // TODO: error if breakpoint not found?
+        if let Some(addr) = m_addr {
+            self.sim.breakpoints.retain(|bp| {
+                bp != &Breakpoint::PC(Comparator::eq(addr))
+            })
+        }
     }
     
     fn breakpoints(&self) -> Vec<u16> {
@@ -182,38 +275,38 @@ impl PySimulator {
 
     #[getter]
     fn get_n(&self) -> bool {
-        todo!()
+        self.sim.psr().cc() & 0b100 != 0
     }
     #[getter]
     fn get_z(&self) -> bool {
-        todo!()
+        self.sim.psr().cc() & 0b010 != 0
     }
     #[getter]
     fn get_p(&self) -> bool {
-        todo!()
+        self.sim.psr().cc() & 0b001 != 0
     }
 
     #[getter]
     fn get_pc(&self) -> u16 {
-        todo!()
+        self.sim.pc
     }
     #[setter]
     fn set_pc(&mut self, addr: u16) {
-        todo!()
+        self.sim.pc = addr;
     }
 
     #[getter]
     fn get_executions(&self) -> u64 {
-        todo!()
+        self.sim.instructions_run
     }
 
     #[getter]
     fn get_use_real_halt(&self) -> bool {
-        todo!()
+        self.sim.flags.use_real_halt
     }
     #[setter]
     fn set_use_real_halt(&mut self, status: bool) {
-        todo!()
+        self.sim.flags.use_real_halt = status;
     }
     
     #[getter]
@@ -242,40 +335,4 @@ impl PySimulator {
     fn set_output(&mut self, output: &str) {
         todo!()
     }
-
-    // fn init(&mut self, src_fp: &str) -> PyResult<()> {
-    //     self.sim = Simulator::new(Default::default());
-        
-    //     let src = std::fs::read_to_string(src_fp)?;
-    //     let ast = parse_ast(&src)
-    //         .map_err(LoadError::from_lc3_err)?;
-    //     let obj = assemble_debug(ast, &src)
-    //         .map_err(LoadError::from_lc3_err)?;
-
-    //     self.sim.load_obj_file(&obj);
-    //     Ok(())
-    // }
-
-    // fn run(&mut self) -> PyResult<()> {
-    //     self.sim.run()
-    //         .map_err(|e| SimError::new_err(format!("{e} (PC: 0x{})", self.sim.prefetch_pc())))
-    // }
-
-    // fn get_reg(&self, reg: i32) -> PyResult<u16> {
-    //     match reg {
-    //         0 => Ok(self.sim.reg_file[R0].get()),
-    //         1 => Ok(self.sim.reg_file[R1].get()),
-    //         2 => Ok(self.sim.reg_file[R2].get()),
-    //         3 => Ok(self.sim.reg_file[R3].get()),
-    //         4 => Ok(self.sim.reg_file[R4].get()),
-    //         5 => Ok(self.sim.reg_file[R5].get()),
-    //         6 => Ok(self.sim.reg_file[R6].get()),
-    //         7 => Ok(self.sim.reg_file[R7].get()),
-    //         _ => Err(PyErr::new::<PyIndexError, _>("Invalid Register Specified"))
-    //     }
-    // }
-
-    // fn get_memory(&mut self, address: u16) -> PyResult<u16>{
-    //     Ok(self.sim.mem.get_raw(address).get())
-    // }
 }
