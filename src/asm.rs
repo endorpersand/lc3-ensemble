@@ -197,8 +197,8 @@ impl crate::err::Error for AsmErr {
 /// 8 |     .fill x9F9F
 /// 9 | .end
 /// ```
-/// maps to `LineSymbolMap([(1, [0x3000, 0x3001, 0x3002]), (7, [0x4000, 0x4005])])`.
-struct LineSymbolMap(Vec<(usize, Vec<u16>)>);
+/// maps to `LineSymbolMap({1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]})`.
+struct LineSymbolMap(BTreeMap<usize, Vec<u16>>);
 
 impl LineSymbolMap {
     /// Creates a new line symbol table.
@@ -209,15 +209,20 @@ impl LineSymbolMap {
     /// For example,
     /// 
     /// `[None, Some(0x3000), Some(0x3001), Some(0x3002), None, None, None, Some(0x4000), Some(0x4005)]` 
-    /// condenses to `[(1, [0x3000, 0x3001, 0x3002]), (7, [0x4000, 0x4005])]`.
+    /// condenses to `{1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]}`.
+    /// 
+    /// For a given block of contiguous `Some`s, the memory addresses should be sorted and accesses
+    /// through `LineSymbolMap`'s methods assume the values are sorted.
+    /// 
+    /// If they are not sorted, incorrect behaviors may occur. Skill issue.
     fn new(lines: Vec<Option<u16>>) -> Self {
-        let mut blocks = vec![];
+        let mut blocks = BTreeMap::new();
         let mut current = None;
         for (i, line) in lines.into_iter().enumerate() {
             match line {
                 Some(addr) => current.get_or_insert_with(Vec::new).push(addr),
                 None => if let Some(bl) = current.take() {
-                    blocks.push((i - bl.len(), bl));
+                    blocks.insert(i - bl.len(), bl);
                 },
             }
         }
@@ -227,21 +232,10 @@ impl LineSymbolMap {
 
     /// Gets the memory address associated with this line, if it is present in the line symbol mapping.
     fn get(&self, line: usize) -> Option<u16> {
-        use std::cmp::Ordering;
-
         // Find the block such that `line` falls within the source line number range of the block.
-        let index = self.0.binary_search_by(|(start, words)| {
-            match *start <= line {
-                false => Ordering::Less,
-                true  => match line < *start + words.len() {
-                    true  => Ordering::Equal,
-                    false => Ordering::Greater,
-                },
-            }
-        }).ok()?;
+        let (start, block) = self.0.range(..=line).next_back()?;
 
         // Access the memory address.
-        let (start, block) = &self.0[index];
         block.get(line - *start).copied()
     }
 
