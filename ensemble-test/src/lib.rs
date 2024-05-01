@@ -112,15 +112,27 @@ impl PySimulator {
         self.sim.step_over()
             .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
         }
-        
-    fn read_mem(&mut self, addr: u16) -> PyResult<u16> {
-        let word = self.sim.mem.read(addr, MemAccessCtx { privileged: true, strict: false })
+    #[pyo3(signature=(
+        addr,
+        *,
+        privileged = true,
+        strict = false
+    ))]
+    fn read_mem(&mut self, addr: u16, privileged: bool, strict: bool) -> PyResult<u16> {
+        let word = self.sim.mem.read(addr, MemAccessCtx { privileged, strict })
             .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))?;
 
         Ok(word.get())
     }
-    fn write_mem(&mut self, addr: u16, val: u16) -> PyResult<()> {
-        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged: true, strict: false })
+        #[pyo3(signature=(
+        addr,
+        val,
+        *,
+        privileged = true,
+        strict = false
+    ))]
+    fn write_mem(&mut self, addr: u16, val: u16, privileged: bool, strict: bool) -> PyResult<()> {
+        self.sim.mem.write(addr, Word::new_init(val), MemAccessCtx { privileged, strict })
             .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
     }
     fn get_mem(&self, addr: u16) -> u16 {

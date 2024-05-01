@@ -22,8 +22,8 @@ class Simulator:
     def step_over(self) -> None: pass
 
     # Memory access
-    def read_mem(self, addr: int) -> int: pass
-    def write_mem(self, addr: int, val: int) -> None: pass
+    def read_mem(self, addr: int, *, privileged: bool = True, strict: bool = False) -> int: pass
+    def write_mem(self, addr: int, val: int, *, privileged: bool = True, strict: bool = False) -> None: pass
     def get_mem(self, addr: int) -> int: pass
     def set_mem(self, addr: int, val: int) -> None: pass
 
