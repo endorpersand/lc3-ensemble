@@ -318,6 +318,8 @@ impl Simulator {
         static OS_OBJ_FILE: OnceLock<ObjectFile> = OnceLock::new();
         
         if !self.os_loaded {
+            self.mem.io.mcr = Arc::clone(&self.mcr); // load to allow HALT to function
+
             let obj = OS_OBJ_FILE.get_or_init(|| {
                 let os_file = include_str!("os.asm");
                 let ast = parse_ast(os_file).unwrap();
@@ -346,7 +348,7 @@ impl Simulator {
     
     /// Sets and initializes the IO handler.
     pub fn open_io<IO: Into<SimIO>>(&mut self, io: IO) {
-        let io = std::mem::replace(&mut self.mem.io, io.into());
+        let io = std::mem::replace(&mut self.mem.io.inner, io.into());
         io.close()
     }
 

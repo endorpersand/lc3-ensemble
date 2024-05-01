@@ -5,18 +5,16 @@
 //! 
 //! Besides those two key items, this module also includes:
 //! - [`EmptyIO`]: An `IODevice` holding the implementation for a lack of IO support.
-//! - [`BiChannelIO`]: An `IODevice` holding a basic implementation for IO.
+//! - [`BufferedIO`]: An `IODevice` holding a buffered implementation for IO.
+//! - [`BiChannelIO`]: An `IODevice` holding a threaded/channel implementation for IO.
 //! - [`CustomIO`]: An `IODevice` that can be used to wrap around custom IO implementations.
-//! - [`BlockingQueue`]: Not an `IODevice`, but a utility data structure that can be used as an input buffer.
 
-mod queue;
-
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockWriteGuard, TryLockError};
 use std::thread::JoinHandle;
 
 use crossbeam_channel as cbc;
-pub use queue::*;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
@@ -59,6 +57,96 @@ impl IODevice for EmptyIO {
     fn close(self) {}
 }
 
+/// IO that reads from an input buffer and writes to an output buffer.
+/// 
+/// The input buffer is accessible in the simulator memory through the KBSR and KBDR.
+/// The output buffer is accessible in the simulator memory through the DSR and DDR.
+/// 
+/// The buffers can be accessed in code via [`BufferedIO::get_input`] and [`BufferedIO::get_output`].
+/// 
+/// Note that if a input/output lock guard is acquired from one of the locks of this IO, 
+/// the input/output becomes temporarily inaccessible to the simulator.
+/// Thus, a lock guard should never be leaked otherwise the simulator loses access to the input/output.
+#[derive(Clone)]
+pub struct BufferedIO {
+    input: Arc<RwLock<VecDeque<u8>>>,
+    output: Arc<RwLock<Vec<u8>>>
+}
+impl BufferedIO {
+    /// Creates a new BufferedIO.
+    pub fn new() -> Self {
+        Self { input: Default::default(), output: Default::default() }
+    }
+    /// Creates a new BufferedIO from already defined buffers.
+    pub fn with_bufs(input: Arc<RwLock<VecDeque<u8>>>, output: Arc<RwLock<Vec<u8>>>) -> Self {
+        Self { input, output }
+    }
+
+    fn try_input(&self) -> Option<RwLockWriteGuard<'_, VecDeque<u8>>> {
+        match self.input.try_write() {
+            Ok(g) => Some(g),
+            Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+    fn try_output(&self) -> Option<RwLockWriteGuard<'_, Vec<u8>>> {
+        match self.output.try_write() {
+            Ok(g) => Some(g),
+            Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// Gets a reference to the input buffer.
+    pub fn get_input(&self) -> &Arc<RwLock<VecDeque<u8>>> {
+        &self.input
+    }
+    /// Gets a reference to the output buffer.
+    pub fn get_output(&self) -> &Arc<RwLock<Vec<u8>>> {
+        &self.output
+    }
+}
+impl Default for BufferedIO {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl IODevice for BufferedIO {
+    fn io_read(&self, addr: u16) -> Option<u16> {
+        match addr {
+            KBSR => {
+                // We're ready once we can obtain a write lock to the input
+                // AND the input internally is not empty.
+                Some(io_bool({
+                    self.try_input()
+                        .is_some_and(|inp| !inp.is_empty())
+                }))
+            },
+            KBDR => self.try_input()?.pop_front().map(u16::from),
+            DSR => {
+                // We're ready once we can obtain a lock to the output.
+                Some(io_bool(self.try_output().is_some()))
+            },
+            _ => None
+        }
+    }
+
+    fn io_write(&self, addr: u16, data: u16) -> bool {
+        match addr {
+            DDR => match self.try_output() {
+                Some(mut out) => {
+                    out.push(data as u8);
+                    true
+                },
+                None => false
+            },
+            _ => false
+        }
+    }
+    
+    fn close(self) {}
+}
+
 /// A helper struct for [`BiChannelIO::new`], 
 /// indicating the channel is closed and no more reads/writes will come from it.
 #[derive(Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -81,9 +169,7 @@ pub struct BiChannelIO {
     read_handler: JoinHandle<()>,
 
     write_data:    cbc::Sender<u8>,
-    write_handler: JoinHandle<()>,
-
-    mcr: Arc<AtomicBool>
+    write_handler: JoinHandle<()>
 }
 impl BiChannelIO {
     /// Creates a new bi-channel IO device with the given reader and writer.
@@ -101,8 +187,7 @@ impl BiChannelIO {
     /// the reader thread while the simulator is not running.
     pub fn new(
         mut reader: impl FnMut() -> Result<u8, Stop> + Send + 'static, 
-        mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static, 
-        mcr: Arc<AtomicBool>
+        mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static
     ) -> Self {
         let (read_tx, read_rx) = cbc::bounded(1);
         let (write_tx, write_rx) = cbc::bounded(1);
@@ -124,8 +209,7 @@ impl BiChannelIO {
             read_data: read_rx, 
             read_handler, 
             write_data: write_tx, 
-            write_handler, 
-            mcr
+            write_handler
         }
     }
 
@@ -133,7 +217,7 @@ impl BiChannelIO {
     /// 
     /// Note that due to how stdin works in terminals, data is only sent once a new line is typed.
     /// Additionally, this flushes stdout every time a byte is written.
-    pub fn stdio(mcr: Arc<AtomicBool>) -> Self {
+    pub fn stdio() -> Self {
         use std::io::{self, BufRead, Write};
 
         Self::new(
@@ -151,8 +235,7 @@ impl BiChannelIO {
                 io::stdout().write_all(&[byte]).unwrap();
                 io::stdout().flush().unwrap();
                 Ok(())
-            }, 
-            mcr
+            }
         )
     }
 }
@@ -170,7 +253,6 @@ impl IODevice for BiChannelIO {
                 Err(cbc::TryRecvError::Disconnected) => None,
             },
             DSR => Some(io_bool(self.write_data.is_empty())),
-            MCR => Some(io_bool(self.mcr.load(Ordering::Relaxed))),
             _ => None
         }
     }
@@ -178,11 +260,6 @@ impl IODevice for BiChannelIO {
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
             DDR => self.write_data.send(data as u8).is_ok(),
-            MCR => {
-                // store whether last bit is 1 (e.g., if data is negative)
-                self.mcr.store((data as i16) < 0, Ordering::Relaxed);
-                true
-            }
             _ => false
         }
     }
@@ -192,8 +269,7 @@ impl IODevice for BiChannelIO {
             read_data,
             read_handler: _,
             write_data,
-            write_handler,
-            mcr: _
+            write_handler
         } = self;
 
         // Drop the channels.
@@ -276,10 +352,49 @@ impl IODevice for CustomIO {
     }
 }
 
+/// An IO device that handles MCR read/writes 
+/// and delegates the rest to the inner IO device.
+/// 
+/// This isn't exposed publicly because public users 
+/// can't really do much with it, since its use
+/// is hardcoded into the simulator.
+#[derive(Debug, Default)]
+pub(super) struct WithMCR<IO> {
+    pub inner: IO,
+    pub mcr: Arc<AtomicBool>
+}
+impl<IO: IODevice> IODevice for WithMCR<IO> {
+    fn io_read(&self, addr: u16) -> Option<u16> {
+        match addr {
+            MCR => Some(io_bool(self.mcr.load(Ordering::Relaxed))),
+            _ => self.inner.io_read(addr)
+        }
+    }
+
+    fn io_write(&self, addr: u16, data: u16) -> bool {
+        match addr {
+            MCR => {
+                // store whether last bit is 1 (e.g., if data is negative)
+                self.mcr.store((data as i16) < 0, Ordering::Relaxed);
+                true
+            }
+            _ => self.inner.io_write(addr, data)
+        }
+    }
+
+    fn close(self) {
+        self.inner.close()
+    }
+}
+
 /// All the variants of IO accepted by the Simulator.
+#[derive(Default)]
 pub enum SimIO {
     /// No IO. This corresponds to the implementation of [`EmptyIO`].
+    #[default]
     Empty,
+    /// A buffered implementation. See [`BufferedIO`].
+    Buffered(BufferedIO),
     /// A bi-channel IO implementation. See [`BiChannelIO`].
     BiChannel(BiChannelIO),
     /// A custom IO implementation. See [`CustomIO`].
@@ -296,6 +411,11 @@ impl From<EmptyIO> for SimIO {
         SimIO::Empty
     }
 }
+impl From<BufferedIO> for SimIO {
+    fn from(value: BufferedIO) -> Self {
+        SimIO::Buffered(value)
+    }
+}
 impl From<BiChannelIO> for SimIO {
     fn from(value: BiChannelIO) -> Self {
         SimIO::BiChannel(value)
@@ -310,14 +430,16 @@ impl IODevice for SimIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match self {
             SimIO::Empty => EmptyIO.io_read(addr),
+            SimIO::Buffered(io) => io.io_read(addr),
             SimIO::BiChannel(io) => io.io_read(addr),
-            SimIO::Custom(io) => io.io_read(addr)
+            SimIO::Custom(io) => io.io_read(addr),
         }
     }
 
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match self {
             SimIO::Empty => EmptyIO.io_write(addr, data),
+            SimIO::Buffered(io) => io.io_write(addr, data),
             SimIO::BiChannel(io) => io.io_write(addr, data),
             SimIO::Custom(io) => io.io_write(addr, data)
         }
@@ -326,8 +448,11 @@ impl IODevice for SimIO {
     fn close(self) {
         match self {
             SimIO::Empty => EmptyIO.close(),
+            SimIO::Buffered(io) => io.close(),
             SimIO::BiChannel(io) => io.close(),
             SimIO::Custom(io) => io.close()
         }
     }
 }
+
+pub(super) type SimIOwMCR = WithMCR<SimIO>;
