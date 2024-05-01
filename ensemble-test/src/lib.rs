@@ -3,7 +3,7 @@ use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::debug::{Breakpoint, Comparator};
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word};
-use lc3_ensemble::sim::{SimErr, Simulator};
+use lc3_ensemble::sim::{SimErr, Simulator, WordCreateStrategy};
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 
@@ -13,7 +13,8 @@ fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimulator>()?;
     m.add("LoadError", py.get_type_bound::<LoadError>())?;
     m.add("SimError", py.get_type_bound::<SimError>())?;
-    
+    m.add_class::<MemoryFillType>()?;
+
     Ok(())
 }
 
@@ -47,6 +48,14 @@ enum BreakpointLocation {
     Address(u16),
     Label(String)
 }
+
+#[derive(Clone, Copy)]
+#[pyclass(module="ensemble_test")]
+enum MemoryFillType {
+    Random,
+    Single
+}
+
 #[pyclass(name="Simulator", module="ensemble_test")]
 struct PySimulator {
     sim: Simulator,
@@ -61,6 +70,23 @@ impl PySimulator {
             sim: Simulator::new(Default::default()),
             obj: None
         }
+    }
+
+    fn init(&mut self, fill: MemoryFillType, value: Option<u64>) -> u64 {
+        let (strat, ret_value) = match fill {
+            MemoryFillType::Random => {
+                let seed = value.unwrap_or_else(rand::random);
+                (WordCreateStrategy::Seeded { seed }, seed)
+            },
+            MemoryFillType::Single => {
+                let value = value.unwrap_or(0);
+                (WordCreateStrategy::Known { value: value as u16 }, value)
+            },
+        };
+        
+        self.sim.flags.word_create_strat = strat;
+        self.sim.reset();
+        ret_value
     }
 
     fn load_file(&mut self, src_fp: &str) -> PyResult<()> {

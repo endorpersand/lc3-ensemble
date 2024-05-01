@@ -11,12 +11,15 @@
 class Simulator:
     def __new__(cls): pass
 
+    # Initializing machine state
+    def init(self, fill: MemoryFillType, value: int | None = None) -> int: pass
+
     # Loading simulator code
     def load_file(self, src_fp: str) -> None: pass
     def load_code(self, src: str) -> None: pass
 
     # Simulation
-    def run(self, limit: int | None) -> None: pass
+    def run(self, limit: int | None = None) -> None: pass
     def step_in(self) -> None: pass
     def step_out(self) -> None: pass
     def step_over(self) -> None: pass
@@ -130,3 +133,6 @@ class LoadError(ValueError):
     pass
 class SimError(ValueError):
     pass
+class MemoryFillType:
+    Random: MemoryFillType
+    Single: MemoryFillType
