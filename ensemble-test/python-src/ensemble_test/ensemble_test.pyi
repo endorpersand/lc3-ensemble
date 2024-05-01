@@ -96,9 +96,9 @@ class Simulator:
     def use_real_halt(self, status: bool) -> None: pass
     
     @property
-    def strict_execution(self) -> bool: pass
-    @strict_execution.setter
-    def strict_execution(self, status: bool) -> None: pass
+    def strict_mem_accesses(self) -> bool: pass
+    @strict_mem_accesses.setter
+    def strict_mem_accesses(self, status: bool) -> None: pass
     
     # I/O
     @property

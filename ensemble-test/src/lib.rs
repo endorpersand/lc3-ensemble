@@ -304,12 +304,12 @@ impl PySimulator {
     }
     
     #[getter]
-    fn get_strict_execution(&self) -> bool {
-        todo!()
+    fn get_strict_mem_accesses(&self) -> bool {
+        self.sim.flags.strict
     }
     #[setter]
-    fn set_strict_execution(&mut self, status: bool) {
-        todo!()
+    fn set_strict_mem_accesses(&mut self, status: bool) {
+        self.sim.flags.strict = status;
     }
     
     #[getter]
