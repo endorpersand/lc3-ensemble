@@ -66,8 +66,6 @@ class Simulator:
     # Label lookup
     def lookup(self, label: str) -> int | None: pass
     def reverse_lookup(self, addr: int) -> str | None: pass
-    def add_label(self, label: str, addr: int) -> bool: pass
-    def delete_label(self, label: str) -> None: pass
 
     # Breakpoints
     def add_breakpoint(self, break_loc: int | str): pass

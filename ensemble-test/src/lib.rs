@@ -236,12 +236,6 @@ impl PySimulator {
 
         Some(label)
     }
-    fn add_label(&mut self, label: &str, addr: u16) -> bool {
-        todo!()
-    }
-    fn delete_label(&mut self, label: &str) {
-        todo!()
-    }
 
     fn add_breakpoint(&mut self, break_loc: BreakpointLocation) {
         let m_addr = match break_loc {
