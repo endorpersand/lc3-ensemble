@@ -80,6 +80,9 @@ impl PySimulator {
         self.sim.open_io(io);
         
         self.obj.take();
+
+        self.input.write().unwrap_or_else(|e| e.into_inner()).clear();
+        self.output.write().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 #[pymethods]
