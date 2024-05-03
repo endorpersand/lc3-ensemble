@@ -128,17 +128,8 @@ impl PySimulator {
     /// 
     /// This can raise a [`LoadError`] if assembling fails.
     fn load_file(&mut self, src_fp: &str) -> PyResult<()> {
-        self.reset();
-
         let src = std::fs::read_to_string(src_fp)?;
-        let ast = parse_ast(&src)
-            .map_err(LoadError::from_lc3_err)?;
-        let obj = assemble_debug(ast, &src)
-            .map_err(LoadError::from_lc3_err)?;
-        
-        self.sim.load_obj_file(&obj);
-        self.obj.replace(obj);
-        Ok(())
+        self.load_code(&src)
     }
 
     /// Assembles ASM code from a provided string, 
@@ -154,6 +145,7 @@ impl PySimulator {
             .map_err(LoadError::from_lc3_err)?;
         
         self.sim.load_obj_file(&obj);
+        self.obj.replace(obj);
         Ok(())
     }
 
