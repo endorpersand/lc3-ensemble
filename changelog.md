@@ -1,3 +1,18 @@
+# 0.3.0 (May 2, 2024)
+
+- Various comment patches
+- Rename `SymbolTable`'s methods to be clearer and more consistent
+  - `SymbolTable::get_label` -> `SymbolTable::lookup_label`
+  - `SymbolTable::get_line` -> `SymbolTable::lookup_line`
+  - `SymbolTable::find_label_source` -> `SymbolTable::get_label_source`
+  - `SymbolTable::find_line_source` -> `SymbolTable::rev_lookup_line`
+  - Add `SymbolTable::rev_Lookup_label`
+- IO revisions
+  - Create `BufferedIO`, which is a buffered implementation of IO.
+    - This was previously handled by `BiChannelIO` + `BlockingQueue`, but that implementation did not have easy access to the input. `BufferedIO` allows access to input (and hopefully is easier to use in general).
+  - Remove `BlockingQueue`
+    - No longer necessary due to introduction of `BufferedIO`.
+
 # 0.2.1 (April 29, 2024)
 
 - Lower the Rust MSRV to 1.70 (from 1.77).
