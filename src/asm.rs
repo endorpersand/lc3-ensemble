@@ -178,19 +178,51 @@ impl crate::err::Error for AsmErr {
     }
 }
 
-/// A symbol table that maps source line numbers to memory addresses.
-struct LineSymbolMap(Vec<(usize, Vec<u16>)>);
+/// A mapping from line numbers to memory addresses (and vice-versa).
+///
+/// This is implemented as a sorted list of contiguous blocks, consisting of:
+/// - The first source line number of the block, and
+/// - The memory addresses of the block
+/// 
+/// For example,
+/// ```text
+/// 0 | .orig x3000
+/// 1 |     AND R0, R0, #0
+/// 2 |     ADD R0, R0, #5
+/// 3 |     HALT
+/// 4 | .end
+/// 5 | 
+/// 6 | .orig x4000
+/// 7 |     .blkw 5
+/// 8 |     .fill x9F9F
+/// 9 | .end
+/// ```
+/// maps to `LineSymbolMap({1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]})`.
+struct LineSymbolMap(BTreeMap<usize, Vec<u16>>);
 
 impl LineSymbolMap {
     /// Creates a new line symbol table.
+    /// 
+    /// This takes an expanded list of line-memory address mappings and condenses it into 
+    /// the internal [`LineSymbolMap`] format.
+    /// 
+    /// For example,
+    /// 
+    /// `[None, Some(0x3000), Some(0x3001), Some(0x3002), None, None, None, Some(0x4000), Some(0x4005)]` 
+    /// condenses to `{1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]}`.
+    /// 
+    /// For a given block of contiguous `Some`s, the memory addresses should be sorted and accesses
+    /// through `LineSymbolMap`'s methods assume the values are sorted.
+    /// 
+    /// If they are not sorted, incorrect behaviors may occur. Skill issue.
     fn new(lines: Vec<Option<u16>>) -> Self {
-        let mut blocks = vec![];
+        let mut blocks = BTreeMap::new();
         let mut current = None;
         for (i, line) in lines.into_iter().enumerate() {
             match line {
                 Some(addr) => current.get_or_insert_with(Vec::new).push(addr),
                 None => if let Some(bl) = current.take() {
-                    blocks.push((i - bl.len(), bl));
+                    blocks.insert(i - bl.len(), bl);
                 },
             }
         }
@@ -198,21 +230,12 @@ impl LineSymbolMap {
         Self(blocks)
     }
 
-    /// Gets the memory address associated with this line, if it is present in the symbol table.
+    /// Gets the memory address associated with this line, if it is present in the line symbol mapping.
     fn get(&self, line: usize) -> Option<u16> {
-        use std::cmp::Ordering;
+        // Find the block such that `line` falls within the source line number range of the block.
+        let (start, block) = self.0.range(..=line).next_back()?;
 
-        let index = self.0.binary_search_by(|(start, words)| {
-            match *start <= line {
-                false => Ordering::Less,
-                true  => match line < *start + words.len() {
-                    true  => Ordering::Equal,
-                    false => Ordering::Greater,
-                },
-            }
-        }).ok()?;
-
-        let (start, block) = &self.0[index];
+        // Access the memory address.
         block.get(line - *start).copied()
     }
 
@@ -220,6 +243,8 @@ impl LineSymbolMap {
     fn find(&self, addr: u16) -> Option<usize> {
         self.0.iter()
             .find_map(|(start, words)| {
+                // Find the block that contains the given address,
+                // and then find the line index once it's found.
                 words.binary_search(&addr)
                     .ok()
                     .map(|o| start + o)
@@ -237,7 +262,8 @@ impl LineSymbolMap {
     }
 }
 
-/// Details some encoding information about the source.
+/// Struct holding the source string and contains helpers 
+/// to index lines and to query position information from a source string.
 pub struct SourceInfo {
     /// The source code.
     src: String,
@@ -298,8 +324,10 @@ impl SourceInfo {
     }
 
     /// Reads a line from source.
+    /// 
+    /// This returns None if line is not in the interval `[0, number of lines)`.
     pub fn read_line(&self, line: usize) -> Option<&str> {
-        Some(&self.src[self.line_span(line)?])
+        self.line_span(line).map(|r| &self.src[r])
     }
 
     /// Calculates the line and character number for a given character index.
@@ -325,6 +353,14 @@ impl SourceInfo {
 /// - A mapping from source code labels to memory addresses.
 /// - A mapping from source code line numbers to memory addresses (if debug symbols are enabled, see [`SymbolTable::new`]).
 /// - The source text (if debug symbols are enabled, see [`SymbolTable::new`]).
+/// 
+/// Here is a table of the mappings that the symbol table provides:
+/// 
+/// | from ↓, to → | label                              | memory address                | source line/span                  |
+/// |----------------|------------------------------------|-------------------------------|-----------------------------------|
+/// | label          | -                                  | [`SymbolTable::lookup_label`] | [`SymbolTable::get_label_source`] |
+/// | memory address | [`SymbolTable::rev_lookup_label`]  | -                             | [`SymbolTable::rev_lookup_line`]  |
+/// | source line    | none                               | [`SymbolTable::lookup_line`]  | -                                 |
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, (u16, usize)>,
@@ -448,26 +484,28 @@ impl SymbolTable {
     }
 
     /// Gets the memory address of a given label (if it exists).
-    pub fn get_label(&self, label: &str) -> Option<u16> {
+    pub fn lookup_label(&self, label: &str) -> Option<u16> {
         self.label_map.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 
-    /// Gets the source span of a given label (if it exists).
-    pub fn find_label_source(&self, label: &str) -> Option<Range<usize>> {
-        let &(_, start) = self.label_map.get(label)?;
-        Some(start..(start + label.len()))
+    /// Gets the label at a given memory address (if it exists).
+    pub fn rev_lookup_label(&self, addr: u16) -> Option<&str> {
+        let (label, _) = self.label_map.iter()
+            .find(|&(_, (label_addr, _))| label_addr == &addr)?;
+
+        Some(label)
     }
 
-    /// Gets an iterable of the mapping from labels to addresses.
-    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
-        self.label_map.iter()
-            .map(|(label, &(addr, _))| (&**label, addr))
+    /// Gets the source span of a given label (if it exists).
+    pub fn get_label_source(&self, label: &str) -> Option<Range<usize>> {
+        let &(_, start) = self.label_map.get(label)?;
+        Some(start..(start + label.len()))
     }
 
     /// Gets the address of a given source line.
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
-    pub fn get_line(&self, line: usize) -> Option<u16> {
+    pub fn lookup_line(&self, line: usize) -> Option<u16> {
         self.line_map.get(line)
     }
 
@@ -477,13 +515,19 @@ impl SymbolTable {
     /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
-    pub fn find_line_source(&self, addr: u16) -> Option<usize> {
+    pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
         self.line_map.find(addr)
     }
 
     /// Reads the source info from this symbol table (if debug symbols are enabled).
     pub fn source_info(&self) -> Option<&SourceInfo> {
         self.src_info.as_ref()
+    }
+
+    /// Gets an iterable of the mapping from labels to addresses.
+    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
+        self.label_map.iter()
+            .map(|(label, &(addr, _))| (&**label, addr))
     }
 }
 impl std::fmt::Debug for SymbolTable {
@@ -532,7 +576,7 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.get_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
+            let Some(loc) = sym.lookup_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
             IOffset::new(loc.wrapping_sub(lc) as i16)
                 .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
         },
@@ -594,7 +638,7 @@ impl Directive {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
                     PCOffset::Label(l)  => {
-                        labels.get_label(&l.name)
+                        labels.lookup_label(&l.name)
                             .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
                     },
                 };

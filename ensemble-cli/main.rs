@@ -184,7 +184,7 @@ impl ReportSimErr {
 
         'sym_ref: {
             let Some(sym) = obj.symbol_table() else { break 'sym_ref };
-            let Some(pc_source) = sym.find_line_source(pc) else { break 'sym_ref };
+            let Some(pc_source) = sym.rev_lookup_line(pc) else { break 'sym_ref };
             let Some(src_info) = sym.source_info() else { break 'sym_ref };
             span = src_info.line_span(pc_source);
         }

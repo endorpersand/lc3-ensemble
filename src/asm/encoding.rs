@@ -95,7 +95,7 @@ impl ObjectFile {
     pub fn read_bytes(mut vec: &[u8]) -> Option<ObjectFile> {
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::new();
-        let mut line_map   = vec![];
+        let mut line_map   = BTreeMap::new();
         let mut nl_indices = None;
         let mut src = None;
 
@@ -128,7 +128,11 @@ impl ObjectFile {
                     let data_len = u16::from_le_bytes(take::<2>(&mut vec)?);
                     let data     = map_chunks::<_, 2>(take_slice(&mut vec, 2 * usize::from(data_len))?, u16::from_le_bytes);
                     
-                    line_map.push((lno, data));
+                    // Assert line map has sorted data without duplicates,
+                    // as LineSymbolMap depends on the block being sorted
+                    // and assumes no duplicates (since no two lines map to the same address)
+                    assert_sorted_no_dup(&data)?;
+                    line_map.insert(lno, data);
                 },
                 0x03 => {
                     let ref_li  = nl_indices.get_or_insert(vec![]);
@@ -137,6 +141,11 @@ impl ObjectFile {
                     let li_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let li     = map_chunks::<_, 8>(take_slice(&mut vec, 8 * li_len)?, |arr| u64::from_le_bytes(arr) as usize);
                     ref_li.extend(li);
+
+                    // Assert line indices has sorted data without duplicates,
+                    // as calculations with nl_indices depends on the list being sorted
+                    // and assumes no duplicates (since no two lines have the new line at the same place)
+                    assert_sorted_no_dup(ref_li)?;
 
                     let src_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let obj_src = std::str::from_utf8(take_slice(&mut vec, src_len)?).ok()?;
@@ -187,4 +196,10 @@ fn map_chunks<T, const N: usize>(data: &[u8], f: impl FnMut([u8; N]) -> T) -> Ve
         .map(|c| <[_; N]>::try_from(c).unwrap())
         .map(f)
         .collect()
+}
+fn assert_sorted_no_dup<T: Ord>(data: &[T]) -> Option<()> {
+    data.windows(2)
+        .map(|w| <&[_; 2]>::try_from(w).unwrap())
+        .all(|[l, r]| l < r)
+        .then_some(())
 }

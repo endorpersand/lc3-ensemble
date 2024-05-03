@@ -10,7 +10,7 @@ use rand::Rng;
 
 use crate::ast::Reg;
 
-use super::{IODevice, SimErr, SimIO};
+use super::{IODevice, SimErr, SimIOwMCR};
 
 /// A memory location that can be read and written to.
 /// 
@@ -47,7 +47,7 @@ use super::{IODevice, SimErr, SimIO};
 /// When a `Word` is created for memory/register files (i.e., via [`Word::new_uninit`]), 
 /// it is created with the initialization bits set to fully uninitialized.
 /// The data associated with this `Word` is decided by the creation strategy 
-/// (see [`WordCreateStrategy`] for details).
+/// (see [`super::WordCreateStrategy`] for details).
 #[derive(Debug, Clone, Copy)]
 pub struct Word {
     data: u16,
@@ -349,7 +349,7 @@ const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 #[derive(Debug)]
 pub struct Mem {
     pub(super) data: Box<[Word; N]>,
-    pub(super) io: SimIO
+    pub(super) io: SimIOwMCR
 }
 impl Mem {
     /// Creates a new memory with a provided word creation strategy.
@@ -360,7 +360,7 @@ impl Mem {
                 .collect::<Box<_>>()
                 .try_into()
                 .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements")),
-            io: SimIO::Empty
+            io: Default::default()
         }
     }
 
