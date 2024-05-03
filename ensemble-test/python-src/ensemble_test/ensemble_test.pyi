@@ -108,6 +108,7 @@ class Simulator:
     def input(self) -> str: pass
     @input.setter
     def input(self, input: str) -> None: pass
+    def append_to_input(self, input: str) -> None: pass
     
     @property
     def output(self) -> str: pass

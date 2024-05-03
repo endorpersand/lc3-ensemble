@@ -1,7 +1,11 @@
+use std::collections::VecDeque;
+use std::sync::{Arc, RwLock};
+
 use lc3_ensemble::asm::{assemble_debug, ObjectFile};
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::debug::{Breakpoint, Comparator};
+use lc3_ensemble::sim::io::BufferedIO;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word};
 use lc3_ensemble::sim::{SimErr, Simulator, WordCreateStrategy};
 use pyo3::{create_exception, prelude::*};
@@ -63,17 +67,34 @@ enum MemoryFillType {
 #[pyclass(name="Simulator", module="ensemble_test")]
 struct PySimulator {
     sim: Simulator,
-    obj: Option<ObjectFile>
+    obj: Option<ObjectFile>,
+    input: Arc<RwLock<VecDeque<u8>>>,
+    output: Arc<RwLock<Vec<u8>>>
 }
 
+impl PySimulator {
+    fn reset(&mut self) {
+        self.sim.reset();
+
+        let io = BufferedIO::with_bufs(Arc::clone(&self.input), Arc::clone(&self.output));
+        self.sim.open_io(io);
+        
+        self.obj.take();
+    }
+}
 #[pymethods]
 impl PySimulator {
     #[new]
     fn constructor() -> Self {
-        Self {
+        let mut this = Self {
             sim: Simulator::new(Default::default()),
-            obj: None
-        }
+            obj: None,
+            input: Default::default(),
+            output: Default::default()
+        };
+
+        this.reset();
+        this
     }
 
     /// Initialize the register files and memory of the simulator with the provided fill type and seed.
@@ -98,7 +119,7 @@ impl PySimulator {
         };
         
         self.sim.flags.word_create_strat = strat;
-        self.sim.reset();
+        self.reset();
         ret_value
     }
 
@@ -107,8 +128,7 @@ impl PySimulator {
     /// 
     /// This can raise a [`LoadError`] if assembling fails.
     fn load_file(&mut self, src_fp: &str) -> PyResult<()> {
-        self.sim.reset();
-        self.obj.take();
+        self.reset();
 
         let src = std::fs::read_to_string(src_fp)?;
         let ast = parse_ast(&src)
@@ -126,8 +146,7 @@ impl PySimulator {
     /// 
     /// This can raise a [`LoadError`] if assembling fails.
     fn load_code(&mut self, src: &str) -> PyResult<()> {
-        self.sim.reset();
-        self.obj.take();
+        self.reset();
 
         let ast = parse_ast(src)
             .map_err(LoadError::from_lc3_err)?;
@@ -341,15 +360,11 @@ impl PySimulator {
 
     /// Looks up the address of a given label, returning None if the label is not defined.
     fn lookup(&self, label: &str) -> Option<u16> {
-        self.obj.as_ref()?.symbol_table()?.get_label(label)
+        self.obj.as_ref()?.symbol_table()?.lookup_label(label)
     }
     /// Looks up the label at a given address, returning None if no label is at the given address.
     fn reverse_lookup(&self, addr: u16) -> Option<&str> {
-        // TODO: more efficient label access
-        let (label, _) = self.obj.as_ref()?.symbol_table()?.label_iter()
-            .find(|&(_, a)| a == addr)?;
-
-        Some(label)
+        self.obj.as_ref()?.symbol_table()?.rev_lookup_label(addr)
     }
 
     /// Adds a breakpoint to the given location.
@@ -439,21 +454,43 @@ impl PySimulator {
     
     /// The I/O input.
     #[getter]
-    fn get_input(&self) -> &str {
-        todo!()
+    fn get_input(&self) -> String {
+        let data: Vec<_> = self.input.read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .copied()
+            .collect();
+
+        String::from_utf8_lossy(&data).into_owned()
     }
     #[setter]
     fn set_input(&mut self, input: &str) {
-        todo!()
+        let mut inp = self.input.write()
+            .unwrap_or_else(|e| e.into_inner());
+
+        inp.clear();
+        inp.extend(input.as_bytes());
     }
-    
+    fn append_to_input(&mut self, input: &str) {
+        self.input.write()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(input.as_bytes())
+    }
+
     /// The I/O output.
     #[getter]
-    fn get_output(&self) -> &str {
-        todo!()
+    fn get_output(&self) -> String {
+        String::from_utf8_lossy({
+            &self.output.read()
+                .unwrap_or_else(|e| e.into_inner())
+        }).into_owned()
     }
     #[setter]
     fn set_output(&mut self, output: &str) {
-        todo!()
+        let mut out = self.output.write()
+        .unwrap_or_else(|e| e.into_inner());
+
+        out.clear();
+        out.extend(output.as_bytes());
     }
 }

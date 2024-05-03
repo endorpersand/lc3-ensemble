@@ -9,6 +9,6 @@ name = "ensemble_test"
 crate-type = ["cdylib"]
 
 [dependencies]
-lc3-ensemble = "0.2.1"
+lc3-ensemble = "0.3.0"
 pyo3 = "0.21.2"
 rand = "0.8.5"
