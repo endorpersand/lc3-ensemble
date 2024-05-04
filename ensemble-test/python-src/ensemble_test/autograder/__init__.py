@@ -18,7 +18,13 @@ def _to_u16(val: int) -> int:
 def _to_i16(val: int) -> int:
     val = _to_u16(val)
     return val - (val >> 15) * 65536
-
+def _require_ascii_string(string: str, *, arg_desc: str | None = None) -> bytes:
+    try:
+        return string.encode("ascii")
+    except UnicodeEncodeError:
+        arg_desc = arg_desc or f"string parameter ({string=!r})"
+        raise ValueError(f"{arg_desc} should be an ASCII string")
+    
 class LC3UnitTestCase(unittest.TestCase):
     def setUp(self):
         self.sim = core.Simulator()
@@ -27,7 +33,7 @@ class LC3UnitTestCase(unittest.TestCase):
     
     def _readContiguous(self, start_addr: int, length: int | None = None):
         ctr = itertools.count() if length is None else range(length)
-        return (self.sim.get_mem(_to_u16(start_addr + i)) for i in ctr)
+        return (self.sim.read_mem(_to_u16(start_addr + i)) for i in ctr)
     
     def _lookup(self, label: str) -> int:
         addr = self.sim.lookup(label)
@@ -54,6 +60,28 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.assertEqual(expected_u, actual_u, msg)
     
+    def writeMemValue(self, label: str, value: int):
+        addr = self._lookup(label)
+        self.sim.write_mem(addr, _to_u16(value))
+    
+    def writeArray(self, label: str, lst: list[int]):
+        addr = self._lookup(label)
+        
+        for i, e in enumerate(lst):
+            self.sim.write_mem(addr + i, _to_u16(e))
+
+    def writeString(self, label: str, string: str):
+        addr = self._lookup(label)
+        string_bytes = _require_ascii_string(string, arg_desc=f"string value parameter ({string=!r})")
+
+        for i, byte in enumerate(string_bytes):
+            self.sim.write_mem(addr + i, _to_u16(byte))
+        self.sim.write_mem(addr + len(string_bytes), 0)
+
+    def setInput(self, inp: str):
+        _require_ascii_string(inp, arg_desc=f"input parameter ({inp=!r})")
+        self.sim.input = inp
+
     def assertReg(self, reg_no: int, expected: int):
         actual = self.sim.get_reg(reg_no)
 
@@ -62,7 +90,7 @@ class LC3UnitTestCase(unittest.TestCase):
     
     def assertMemValue(self, label: str, expected: int):
         addr = self._lookup(label)
-        actual = self.sim.get_mem(addr)
+        actual = self.sim.read_mem(addr)
 
         self._assertShortEqual(expected, actual, 
             f"Expected mem[{label.upper()}] to be {{expected}}, but it was {{actual}}")
@@ -77,16 +105,11 @@ class LC3UnitTestCase(unittest.TestCase):
             self._simpleAssertMsg(f"Array at label {label.upper()} did not match expected", expected, actual))
 
     def assertString(self, label: str, expected_str: str):
-        try:
-            expected_bytes = expected_str.encode("ascii")
-        except UnicodeEncodeError:
-            raise ValueError(f"expected string ({expected_str=!r}) should be an ASCII string")
         addr = self._lookup(label)
+        expected_bytes = _require_ascii_string(expected_str, arg_desc=f"expected string parameter ({expected_str=!r})")
         
         expected = [*expected_bytes, 0]
         actual = list(self._readContiguous(addr, len(expected)))
-        
-        
         
         try:
             nul_pos = actual.index(0)
@@ -128,6 +151,12 @@ class LC3UnitTestCase(unittest.TestCase):
                 )
     
     def assertConsoleOutput(self, expected: str):
+        # There's technically nothing wrong with non-ASCII inputs for this method,
+        # and it could accept non-ASCII text if it wanted
+
+        # But just for consistency and too-lazy-to-verify-correctness,
+        # we'll just require it's ASCII
+        _require_ascii_string(expected, arg_desc=f"expected string parameter ({expected=!r})")
         actual = self.sim.output
         self.assertEqual(expected, actual,
                          self._simpleAssertMsg("Console output did not match expected", expected, actual))
@@ -138,7 +167,7 @@ class LC3UnitTestCase(unittest.TestCase):
                                   signed = False)
     
     def assertCondCode(self, expected: typing.Literal["n", "z", "p"]):
-        if expected not in ('n', 'z', 'p'): raise ValueError(f"expected parameter should be 'n', 'z', or 'p' ({expected=})")
+        if expected not in ('n', 'z', 'p'): raise ValueError(f"expected parameter should be 'n', 'z', or 'p' ({expected=!r})")
         n, z, p = self.sim.n, self.sim.z, self.sim.p
 
         if n + z + p < 1:
