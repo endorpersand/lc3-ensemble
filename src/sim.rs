@@ -348,8 +348,7 @@ impl Simulator {
     
     /// Sets and initializes the IO handler.
     pub fn open_io<IO: Into<SimIO>>(&mut self, io: IO) {
-        let io = std::mem::replace(&mut self.mem.io.inner, io.into());
-        io.close()
+        self.mem.io.inner = io.into();
     }
 
     /// Closes the IO handler, waiting for it to close.
