@@ -348,7 +348,7 @@ const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 /// Memory. This can be addressed with any `u16`.
 #[derive(Debug)]
 pub struct Mem {
-    pub(super) data: Box<[Word; N]>,
+    data: Box<[Word; N]>,
     pub(super) io: SimIOwMCR
 }
 impl Mem {

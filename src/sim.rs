@@ -21,7 +21,7 @@ use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 use io::*;
 
-use self::debug::Breakpoint;
+use self::debug::BreakpointList;
 use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 
 /// Errors that can occur during simulation.
@@ -252,7 +252,7 @@ pub struct Simulator {
 
 
     /// Breakpoints for the simulator.
-    pub breakpoints: Vec<Breakpoint>,
+    pub breakpoints: BreakpointList,
 
     /// The number of instructions successfully run since this `Simulator` was initialized.
     /// 
@@ -289,7 +289,7 @@ impl Simulator {
             flags,
             alloca: Box::new([]),
             mcr: Arc::default(),
-            breakpoints: vec![],
+            breakpoints: Default::default(),
             instructions_run: 0,
             prefetch: false,
             hit_breakpoint: false,
@@ -355,7 +355,7 @@ impl Simulator {
     pub fn close_io(&mut self) {
         self.open_io(EmptyIO) // the illusion of choice
     }
-    
+
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         use std::cmp::Ordering;
@@ -538,7 +538,7 @@ impl Simulator {
             }
 
             // After executing, check that any breakpoints were hit.
-            if self.breakpoints.iter().any(|bp| bp.check(self)) {
+            if self.breakpoints.values().any(|bp| bp.check(self)) {
                 self.hit_breakpoint = true;
                 break;
             }
