@@ -108,12 +108,6 @@ pub enum WordCreateStrategy {
         seed: u64
     },
 
-    /// Generates a random value with the given seed and sets each word to that generated value.
-    SeededFill {
-        /// The seed the RNG was initialized with.
-        seed: u64
-    },
-
     /// Initializes each word to a known value.
     Known {
         /// The value to initialize each value to.
@@ -124,12 +118,11 @@ pub enum WordCreateStrategy {
 impl WordCreateStrategy {
     fn generator(&self) -> WCGenerator {
         use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
+        use rand::SeedableRng;
 
         match self {
             WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
             WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
-            WordCreateStrategy::SeededFill { seed } => WCGenerator::Known(StdRng::seed_from_u64(*seed).gen()),
             WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
         }
     }
