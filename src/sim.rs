@@ -718,7 +718,7 @@ impl Simulator {
             },
             SimInstr::JMP(br) => {
                 // check for RET
-                if br.0 == 7 {
+                if br.reg_no() == 7 {
                     self.frame_stack.pop_frame();
                 }
                 let addr = self.reg_file[br];
