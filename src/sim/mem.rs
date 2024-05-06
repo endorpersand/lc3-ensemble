@@ -16,18 +16,24 @@ use super::{IODevice, SimErr, SimIOwMCR};
 /// 
 /// # Reading
 /// 
-/// A word's value can be read with [`Word::get`]
-/// to return its representation as an unsigned integer.
+/// A word's value can be read with:
+/// - [`Word::get`] to directly access the value, ignoring any initialization state
+/// - [`Word::get_if_init`] to directly access the value after verifying initialization state
 /// 
-/// This can be converted to a signed integer with typical `as` casting (`data as i16`).
+/// See the respective functions for more details.
+/// 
+/// Both functions return the unsigned representation of the word.
+/// If needed, this can be converted to a signed integer with typical `as` casting (`data as i16`).
 /// 
 /// # Writing
 /// 
-/// A word can be written into with a value or with another word.
+/// A word can be written into with a value or with another word:
 /// - [`Word::set`] to read a value into this word
-/// - [`Word::copy_word`] to read a word into this word
+/// - [`Word::set_if_init`] to read a word into this word
 /// 
-/// [`Word::copy_word`] may be more useful in situations where initialization state may want to be preserved.
+/// [`Word::set_if_init`] may be more useful in situations where initialization state needs to be preserved
+/// or when it needs to be verified.
+/// 
 /// See the respective functions for more details.
 /// 
 /// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
@@ -102,8 +108,49 @@ impl Word {
     }
 
     /// Reads the word, returning its unsigned representation.
+    /// 
+    /// The data is returned without checking for initialization state.
+    /// If the initialization state should be checked before trying to query the data,
+    /// then [`Word::get_if_init`] should be used instead.
     pub fn get(&self) -> u16 {
         self.data
+    }
+    /// Reads the word if it is properly initialized under strictness requirements, returning its unsigned representation.
+    /// 
+    /// This function is more cognizant of word initialization than [`Word::get`].
+    /// - In non-strict mode (`strict == false`), this function unconditionally allows access to the data regardless of initialization state.
+    /// - In strict mode (`strict == true`), this function verifies `self` is fully initialized, raising the provided error if not.
+    pub fn get_if_init(&self, strict: bool, err: SimErr) -> Result<u16, SimErr> {
+        match !strict || self.is_init() {
+            true  => Ok(self.data),
+            false => Err(err)
+        }
+    }
+
+    /// Writes to the word.
+    /// 
+    /// This sets the word to the `data` value assuming it is **fully** initialized
+    /// and correspondingly sets the initialization state to be fully initialized.
+    /// 
+    /// If the initialization state of the `data` value should be checked before
+    /// trying to write to the word, then [`Word::set_if_init`] should be used instead.
+    pub fn set(&mut self, data: u16) {
+        self.data = data;
+        self.init = ALL_BITS;
+    }
+    /// Writes to the word while verifying the data stored is properly initialized under strictness requirements.
+    /// 
+    /// This function is more cognizant of word initialization than [`Word::set`].
+    /// - In non-strict mode, this function preserves the initialization data of the `data` argument.
+    /// - In strict mode, this function verifies `data` is fully initialized, raising the provided error if not.
+    pub fn set_if_init(&mut self, data: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
+        match !strict || data.is_init() {
+            true => {
+                *self = data;
+                Ok(())
+            },
+            false => Err(err)
+        }
     }
 
     /// Checks that a word is fully initialized
@@ -113,32 +160,6 @@ impl Word {
     /// Clears initialization of this word.
     pub fn clear_init(&mut self) {
         self.init = NO_BITS;
-    }
-    /// Writes to the word.
-    /// 
-    /// The data provided is assumed to be FULLY initialized,
-    /// and will set the initialization state of this word to be
-    /// fully initialized.
-    /// 
-    /// If the data is not fully initialized (e.g., if it is a partially initialized word),
-    /// [`Word::copy_word`] can be used instead.
-    pub fn set(&mut self, data: u16) {
-        self.data = data;
-        self.init = ALL_BITS;
-    }
-    /// Copies the data from one word into another.
-    /// 
-    /// This function is more cognizant of word initialization than [`Word::set`].
-    /// - In non-strict mode, this function preserves the initialization data of the given word.
-    /// - In strict mode, this function verifies the word copied is fully initialized, raising the provided error if not.
-    pub fn copy_word(&mut self, word: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
-        match !strict || word.is_init() {
-            true => {
-                *self = word;
-                Ok(())
-            },
-            false => Err(err)
-        }
     }
 }
 impl From<u16> for Word {
@@ -298,31 +319,6 @@ impl std::ops::BitAnd for Word {
 impl std::ops::BitAndAssign for Word {
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
-    }
-}
-
-pub(crate) trait AssertInit: Sized {
-    fn is_initialized(&self) -> bool;
-    fn assert_init<E>(self, strict: bool, err: E) -> Result<Self, E> {
-        match !strict || self.is_initialized() {
-            true  => Ok(self),
-            false => Err(err),
-        }
-    }
-}
-impl AssertInit for &Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
-    }
-}
-impl AssertInit for &mut Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
-    }
-}
-impl AssertInit for Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
     }
 }
 
@@ -500,15 +496,14 @@ impl Mem {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
         let write_to_mem = if addr >= IO_START {
-            let io_data = data.assert_init(ctx.strict, SimErr::StrictIOSetUninit)?
-                .get();
+            let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
             self.io.io_write(addr, io_data)
         } else {
             true
         };
         if write_to_mem {
             self.data[usize::from(addr)]
-                .copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)?;
+                .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
         Ok(())
     }

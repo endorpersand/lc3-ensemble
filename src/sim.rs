@@ -22,7 +22,7 @@ use crate::ast::ImmOrReg;
 use io::*;
 
 use self::debug::BreakpointList;
-use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
+use self::mem::{Mem, MemAccessCtx, RegFile, Word};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -417,7 +417,7 @@ impl Simulator {
     /// This should be true when this function is used for instructions like `BR` and `JSR` 
     /// and should be false when this function is used to increment PC during fetch.
     pub fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
-        let addr = addr_word.assert_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?.get();
+        let addr = addr_word.get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
         if self.flags.strict && st_check_mem {
             // Check next memory value is initialized:
             if !self.mem.read(addr, self.default_mem_ctx())?.is_init() {
@@ -499,12 +499,14 @@ impl Simulator {
         
         self.psr.set_privileged(true);
         let mctx = self.default_mem_ctx();
-        let sp = &mut self.reg_file[R6];
 
-        *sp -= 1u16;
-        self.mem.write(sp.get(), Word::new_init(old_psr), mctx)?;
-        *sp -= 1u16;
-        self.mem.write(sp.get(), Word::new_init(old_pc), mctx)?;
+        // push PSR and PC to stack
+        let sp = self.reg_file[R6]
+            .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
+
+        self.reg_file[R6] -= 2u16;
+        self.mem.write(sp.wrapping_sub(1), Word::new_init(old_psr), mctx)?;
+        self.mem.write(sp.wrapping_sub(2), Word::new_init(old_pc), mctx)?;
         
         // set interrupt priority
         if let Some(prio) = priority {
@@ -568,8 +570,7 @@ impl Simulator {
     fn step(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
         let word = self.mem.read(self.pc, self.default_mem_ctx())?
-            .assert_init(self.flags.strict, SimErr::StrictPCCurrUninit)?
-            .get();
+            .get_if_init(self.flags.strict, SimErr::StrictPCCurrUninit)?;
         let instr = SimInstr::decode(word)?;
 
         self.offset_pc(1, false)?;
@@ -589,7 +590,7 @@ impl Simulator {
                 };
 
                 let result = val1 + val2;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LD(dr, off) => {
@@ -597,7 +598,7 @@ impl Simulator {
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::ST(sr, off) => {
@@ -628,24 +629,22 @@ impl Simulator {
                 };
 
                 let result = val1 & val2;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.reg_file[br]
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get()
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
                     .wrapping_add_signed(off.get());
                 let write_strict = self.flags.strict && br != R6 && !self.in_alloca(ea);
                 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STR(sr, br, off) => {
                 let ea = self.reg_file[br]
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get()
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
                     .wrapping_add_signed(off.get());
                 let write_ctx = MemAccessCtx {
                     strict: self.flags.strict && br != R6 && !self.in_alloca(ea),
@@ -658,17 +657,16 @@ impl Simulator {
             SimInstr::RTI => {
                 if self.psr.privileged() {
                     let mctx = self.default_mem_ctx();
-                    let sp = (&mut self.reg_file[R6])
-                        .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
 
-                    let pc = self.mem.read(sp.get(), mctx)?
-                        .assert_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?
-                        .get();
-                    *sp += 1u16;
-                    let psr = self.mem.read(sp.get(), mctx)?
-                        .assert_init(self.flags.strict, SimErr::StrictPSRSetUninit)?
-                        .get();
-                    *sp += 1u16;
+                    // Pop PC and PSR from the stack
+                    let sp = self.reg_file[R6]
+                        .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
+
+                    let pc = self.mem.read(sp, mctx)?
+                        .get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
+                    let psr = self.mem.read(sp.wrapping_add(1), mctx)?
+                        .get_if_init(self.flags.strict, SimErr::StrictPSRSetUninit)?;
+                    self.reg_file[R6] += 2u16;
 
                     self.pc = pc;
                     self.psr = PSR(psr);
@@ -686,25 +684,23 @@ impl Simulator {
                 let val = self.reg_file[sr];
                 
                 let result = !val;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LDI(dr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get();
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STI(sr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get();
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_ctx = MemAccessCtx {
                     strict: self.flags.strict && !self.in_alloca(ea),
                     ..self.default_mem_ctx()
