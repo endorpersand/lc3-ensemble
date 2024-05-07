@@ -63,34 +63,6 @@ pub struct Word {
 const NO_BITS:  u16 = 0;
 const ALL_BITS: u16 = 1u16.wrapping_neg();
 
-/// Trait that describes types that can be used to create the data for an uninitialized [`Word`].
-/// 
-/// This is used with [`Word::new_uninit`] to create uninitialized Words.
-pub trait WordFiller {
-    /// Generate the data.
-    fn generate(&mut self) -> u16;
-}
-impl WordFiller for () {
-    /// This creates unseeded, non-deterministic values.
-    fn generate(&mut self) -> u16 {
-        rand::random()
-    }
-}
-impl WordFiller for u16 {
-    /// Sets each word to the given value.
-    fn generate(&mut self) -> u16 {
-        *self
-    }
-}
-impl WordFiller for StdRng {
-    /// This creates values from the standard random number generator.
-    /// 
-    /// This can be used to create deterministic, seeded values.
-    fn generate(&mut self) -> u16 {
-        self.gen()
-    }
-}
-
 impl Word {
     /// Creates a new word that is considered uninitialized.
     pub fn new_uninit(fill: &mut impl WordFiller) -> Self {
@@ -319,6 +291,86 @@ impl std::ops::BitAnd for Word {
 impl std::ops::BitAndAssign for Word {
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
+    }
+}
+
+/// Trait that describes types that can be used to create the data for an uninitialized [`Word`].
+/// 
+/// This is used with [`Word::new_uninit`] to create uninitialized Words.
+pub trait WordFiller {
+    /// Generate the data.
+    fn generate(&mut self) -> u16;
+}
+impl WordFiller for () {
+    /// This creates unseeded, non-deterministic values.
+    fn generate(&mut self) -> u16 {
+        rand::random()
+    }
+}
+impl WordFiller for u16 {
+    /// Sets each word to the given value.
+    fn generate(&mut self) -> u16 {
+        *self
+    }
+}
+impl WordFiller for StdRng {
+    /// This creates values from the standard random number generator.
+    /// 
+    /// This can be used to create deterministic, seeded values.
+    fn generate(&mut self) -> u16 {
+        self.gen()
+    }
+}
+/// Strategy used to initialize the `reg_file` and `mem` of the [`Simulator`].
+/// 
+/// These are used to set the initial state of the memory and registers,
+/// which will be treated as uninitialized until they are properly initialized
+/// by program code.
+/// 
+/// [`Simulator`]: super::Simulator
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum WordCreateStrategy {
+    /// Initializes each word randomly and non-deterministically.
+    #[default]
+    Unseeded,
+
+    /// Initializes each word randomly and deterministically.
+    Seeded {
+        /// The seed the RNG was initialized with.
+        seed: u64
+    },
+
+    /// Initializes each word to a known value.
+    Known {
+        /// The value to initialize each value to.
+        value: u16
+    }
+}
+
+impl WordCreateStrategy {
+    pub(super) fn generator(&self) -> impl WordFiller {
+        use rand::SeedableRng;
+
+        match self {
+            WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
+            WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
+            WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
+        }
+    }
+}
+
+enum WCGenerator {
+    Unseeded,
+    Seeded(Box<rand::rngs::StdRng>),
+    Known(u16)
+}
+impl WordFiller for WCGenerator {
+    fn generate(&mut self) -> u16 {
+        match self {
+            WCGenerator::Unseeded  => ().generate(),
+            WCGenerator::Seeded(r) => r.generate(),
+            WCGenerator::Known(k)  => k.generate(),
+        }
     }
 }
 
