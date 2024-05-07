@@ -1,3 +1,24 @@
+# 0.4.0 (May 7, 2024)
+
+- IO revisions
+  - Revise `BiChannelIO` to use `Read` and `Write` traits
+  - Change method definitions for `IODevice`
+    - `IODevice::io_read` and `IODevice::io_write` take `&mut self` instead of `&self`
+    - `IODevice::close` is removed (use `Drop` instead)
+- `crate::sim::debug` revisions
+  - Restrict `Breakpoint::PC` to only accept `u16` instead of `Comparator` (as comparing against addresses is unnecessary)
+  - Revise `Comparator` to be an enum
+  - Generalize `Breakpoint::And` and `Breakpoint::Or` to more than 2 breakpoints
+  - Create `BreakpointList` to replace the `Vec<Breakpoint>` field of the simulator. This generates an ID that can be used to keep track of a given breakpoint.
+- `FrameStack` (and `crate::sim::frame`)
+  - Intended to aid in keeping track of call frames (for both subroutines and traps)
+- Miscellaneous API changes
+  - Create `Word::get_if_init` and `Word::set_if_init`, which replace and expand upon `Word::copy_word`
+  - Delete `WordCreateStrategy::SeededFill`
+  - Add `Simulator::run_while`
+  - Add `Reg::try_from` and `Reg::reg_no`
+  - Move `WordCreateStrategy` back into `crate::sim::mem`
+
 # 0.3.0 (May 2, 2024)
 
 - Various comment patches
