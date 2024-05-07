@@ -3,11 +3,13 @@ use std::sync::{Arc, RwLock};
 
 use lc3_ensemble::asm::{assemble_debug, ObjectFile};
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
+use lc3_ensemble::ast::Reg;
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::debug::{Breakpoint, BreakpointKey};
 use lc3_ensemble::sim::io::BufferedIO;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
 use lc3_ensemble::sim::{SimErr, Simulator};
+use pyo3::types::PyInt;
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 
@@ -61,6 +63,13 @@ enum MemoryFillType {
     Random,
     /// Fill the memory with a single known value.
     Single
+}
+
+fn reg_from_py_int(reg_no: Bound<'_, PyInt>) -> PyResult<Reg> {
+    let m_reg = reg_no.extract::<u8>().ok()
+        .and_then(|i| Reg::try_from(i).ok());
+
+    m_reg.ok_or_else(|| PyIndexError::new_err(format!("register {reg_no} out of bounds")))
 }
 
 /// The simulator!
@@ -317,38 +326,16 @@ impl PySimulator {
     /// Gets a value from a register.
     /// 
     /// This raises an error if the index is not between 0 and 7, inclusive.
-    fn get_reg(&self, index: usize) -> PyResult<u16> {
-        let reg = match index {
-            0 => R0,
-            1 => R1,
-            2 => R2,
-            3 => R3,
-            4 => R4,
-            5 => R5,
-            6 => R6,
-            7 => R7,
-            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
-        };
-
+    fn get_reg(&self, index: Bound<'_, PyInt>) -> PyResult<u16> {
+        let reg = reg_from_py_int(index)?;
         Ok(self.sim.reg_file[reg].get())
     }
 
     /// Sets a value to a register.
     /// 
     /// This raises an error if the index is not between 0 and 7, inclusive.
-    fn set_reg(&mut self, index: usize, val: u16) -> PyResult<()> {
-        let reg = match index {
-            0 => R0,
-            1 => R1,
-            2 => R2,
-            3 => R3,
-            4 => R4,
-            5 => R5,
-            6 => R6,
-            7 => R7,
-            _ => return Err(PyIndexError::new_err(format!("register {index} out of bounds")))
-        };
-
+    fn set_reg(&mut self, index: Bound<'_, PyInt>, val: u16) -> PyResult<()> {
+        let reg = reg_from_py_int(index)?;
         self.sim.reg_file[reg].set(val);
         Ok(())
     }

@@ -34,35 +34,35 @@ class Simulator:
     @property
     def r0(self) -> int: pass
     @r0.setter
-    def r0(self, value: int): pass
+    def r0(self, value: int) -> None: pass
     @property
     def r1(self) -> int: pass
     @r1.setter
-    def r1(self, value: int): pass
+    def r1(self, value: int) -> None: pass
     @property
     def r2(self) -> int: pass
     @r2.setter
-    def r2(self, value: int): pass
+    def r2(self, value: int) -> None: pass
     @property
     def r3(self) -> int: pass
     @r3.setter
-    def r3(self, value: int): pass
+    def r3(self, value: int) -> None: pass
     @property
     def r4(self) -> int: pass
     @r4.setter
-    def r4(self, value: int): pass
+    def r4(self, value: int) -> None: pass
     @property
     def r5(self) -> int: pass
     @r5.setter
-    def r5(self, value: int): pass
+    def r5(self, value: int) -> None: pass
     @property
     def r6(self) -> int: pass
     @r6.setter
-    def r6(self, value: int): pass
+    def r6(self, value: int) -> None: pass
     @property
     def r7(self) -> int: pass
     @r7.setter
-    def r7(self, value: int): pass
+    def r7(self, value: int) -> None: pass
     def get_reg(self, index: int) -> int: pass
     def set_reg(self, index: int, val: int) -> None: pass
 
