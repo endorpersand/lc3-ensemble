@@ -6,9 +6,10 @@ use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::ast::Reg;
 use lc3_ensemble::parse::parse_ast;
 use lc3_ensemble::sim::debug::{Breakpoint, BreakpointKey};
+use lc3_ensemble::sim::frame::{Frame, ParameterList};
 use lc3_ensemble::sim::io::BufferedIO;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
-use lc3_ensemble::sim::{SimErr, Simulator};
+use lc3_ensemble::sim::{SimErr, SimFlags, Simulator};
 use pyo3::types::PyInt;
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
@@ -20,6 +21,8 @@ fn ensemble_test(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("LoadError", py.get_type_bound::<LoadError>())?;
     m.add("SimError", py.get_type_bound::<SimError>())?;
     m.add_class::<MemoryFillType>()?;
+    m.add_class::<SubroutineType>()?;
+    m.add_class::<PyFrame>()?;
 
     Ok(())
 }
@@ -50,7 +53,7 @@ impl SimError {
 }
 
 #[derive(FromPyObject)]
-enum BreakpointLocation {
+enum MemLocation {
     Address(u16),
     Label(String)
 }
@@ -70,6 +73,88 @@ fn reg_from_py_int(reg_no: Bound<'_, PyInt>) -> PyResult<Reg> {
         .and_then(|i| Reg::try_from(i).ok());
 
     m_reg.ok_or_else(|| PyIndexError::new_err(format!("register {reg_no} out of bounds")))
+}
+
+#[derive(Clone, Copy)]
+#[pyclass(module="ensemble_test")]
+/// Strategies to fill the memory on initializing the simulator.
+enum SubroutineType {
+    /// Arguments are passed by standard LC-3 calling convention.
+    CallingConvention,
+    /// Arguments are passed by register.
+    PassByRegister,
+}
+
+struct PyParamListWrapper(ParameterList);
+impl IntoPy<PyObject> for PyParamListWrapper {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self.0 {
+            ParameterList::CallingConvention { params } => (SubroutineType::CallingConvention, params).into_py(py),
+            ParameterList::PassByRegister { params, ret } => {
+                let params: Vec<_> = params.into_iter()
+                    .map(|(s, r)| (s, r.reg_no()))
+                    .collect();
+                let ret = ret.map(Reg::reg_no);
+
+                (SubroutineType::PassByRegister, params, ret).into_py(py)
+            },
+        }
+    }
+}
+impl<'py> FromPyObject<'py> for PyParamListWrapper {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        match ob.get_item(0)?.extract::<SubroutineType>()? {
+            SubroutineType::CallingConvention => {
+                let (_, params) = ob.extract::<(SubroutineType, _)>()?;
+                Ok(Self(ParameterList::CallingConvention { params }))
+            },
+            SubroutineType::PassByRegister => {
+                let (_, params, ret) = ob.extract::<(SubroutineType, Vec<_>, Option<_>)>()?;
+                let params = params.into_iter()
+                    .map(|(s, r)| Ok((s, reg_from_py_int(r)?)))
+                    .collect::<PyResult<_>>()?;
+
+                let ret = match ret {
+                    Some(r) => Some(reg_from_py_int(r)?),
+                    None => None
+                };
+                
+                Ok(Self(ParameterList::PassByRegister { params, ret }))
+            }
+        }
+    }
+}
+
+#[repr(transparent)]
+#[pyclass(name="Frame", module="ensemble_test")]
+struct PyFrame(Frame);
+
+#[pymethods]
+impl PyFrame {
+    #[getter]
+    fn get_caller_addr(&self) -> u16 {
+        self.0.caller_addr
+    }
+    #[getter]
+    fn get_callee_addr(&self) -> u16 {
+        self.0.callee_addr
+    }
+    #[getter]
+    fn get_frame_type(&self) -> u16 {
+        self.0.frame_type as u16
+    }
+    #[getter]
+    fn get_frame_ptr(&self) -> Option<(u16, bool)> {
+        let word = self.0.frame_ptr?;
+        Some((word.get(), word.is_init()))
+    }
+    #[getter]
+    fn get_arguments(&self) -> Vec<(u16, bool)> {
+        self.0.arguments
+            .iter()
+            .map(|w| (w.get(), w.is_init()))
+            .collect()
+    }
 }
 
 /// The simulator!
@@ -93,13 +178,25 @@ impl PySimulator {
         self.input.write().unwrap_or_else(|e| e.into_inner()).clear();
         self.output.write().unwrap_or_else(|e| e.into_inner()).clear();
     }
+
+    fn resolve_location(&self, loc: MemLocation) -> Result<u16, String> {
+        match loc {
+            MemLocation::Address(addr) => Ok(addr),
+            MemLocation::Label(label) => self.lookup(&label).ok_or(label),
+        }
+    }
 }
 #[pymethods]
 impl PySimulator {
     #[new]
     fn constructor() -> Self {
+        let flags = SimFlags {
+            debug_frames: true,
+            ..Default::default()
+        };
+        
         let mut this = Self {
-            sim: Simulator::new(Default::default()),
+            sim: Simulator::new(flags),
             obj: None,
             input: Default::default(),
             output: Default::default()
@@ -196,7 +293,15 @@ impl PySimulator {
     fn step_over(&mut self) -> PyResult<()> {
         self.sim.step_over()
             .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
-        }
+    }
+    /// Runs until a frame changes.
+    /// 
+    /// This is not meant for general use.
+    fn _run_until_frame_change(&mut self) -> PyResult<()> {
+        let frame = self.sim.frame_stack.len();
+        self.sim.run_while(|s| s.frame_stack.len() == frame)
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
+    }
     
     #[pyo3(signature=(
         addr,
@@ -350,14 +455,10 @@ impl PySimulator {
     }
 
     /// Adds a breakpoint to the given location.
-    fn add_breakpoint(&mut self, break_loc: BreakpointLocation) -> PyResult<u64> {
-        let addr = match break_loc {
-            BreakpointLocation::Address(addr) => addr,
-            BreakpointLocation::Label(label)  => {
-                self.lookup(&label)
-                    .ok_or_else(|| PyValueError::new_err(format!("cannot add a breakpoint at non-existent label {label:?}")))?
-            },
-        };
+    fn add_breakpoint(&mut self, break_loc: MemLocation) -> PyResult<u64> {
+        let addr = self.resolve_location(break_loc)
+            .map_err(|label| PyValueError::new_err(format!("cannot add a breakpoint at non-existent label {label:?}")))?;
+            
 
         Ok({
             self.sim.breakpoints.insert(Breakpoint::PC(addr))
@@ -473,5 +574,48 @@ impl PySimulator {
 
         out.clear();
         out.extend(output.as_bytes());
+    }
+
+    // Subroutine definitions and frames!
+
+    /// Gets the definition of the subroutine located at the provided location, or None if no definition has been made.
+    /// 
+    /// A definition needs to be made with the `set_subroutine_def` method in order for this method to return a
+    /// non-None value.
+    fn get_subroutine_def(&self, loc: MemLocation) -> PyResult<Option<PyParamListWrapper>> {
+        let addr = self.resolve_location(loc)
+            .map_err(|label| PyValueError::new_err(format!("cannot get subroutine at non-existent label {label:?}")))?;
+
+        Ok({
+            self.sim.frame_stack.get_subroutine_def(addr)
+                .map(|pl| PyParamListWrapper(pl.clone()))
+        })
+    }
+
+    /// Sets the definiton of the subroutine located at the provided location.
+    fn set_subroutine_def(&mut self, loc: MemLocation, pl: PyParamListWrapper) -> PyResult<()> {
+        let addr = self.resolve_location(loc)
+            .map_err(|label| PyValueError::new_err(format!("cannot define subroutine at non-existent label {label:?}")))?;
+
+        self.sim.frame_stack.set_subroutine_def(addr, pl.0);
+        Ok(())
+    }
+
+    /// Gets the total number of frames entered (the number of subroutine/trap calls we're currently deep in)
+    #[getter]
+    fn get_frame_number(&self) -> u64 {
+        self.sim.frame_stack.len()
+    }
+
+    /// Gets a list of the current frames in the frame stack.
+    #[getter]
+    fn get_frames(&self) -> Option<Vec<PyFrame>> {
+        let frames = self.sim.frame_stack.frames()?
+            .iter()
+            .cloned()
+            .map(PyFrame)
+            .collect();
+
+        Some(frames)
     }
 }

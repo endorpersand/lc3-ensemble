@@ -8,6 +8,10 @@
 # in a Python project, it's just that there won't be type annotations
 # from the IDE.
 
+import enum
+from typing import Literal, TypeAlias
+
+
 class Simulator:
     def __new__(cls): pass
 
@@ -23,6 +27,7 @@ class Simulator:
     def step_in(self) -> None: pass
     def step_out(self) -> None: pass
     def step_over(self) -> None: pass
+    def _run_until_frame_change(self) -> None: pass
 
     # Memory access
     def read_mem(self, addr: int, *, privileged: bool = True, strict: bool = False) -> int: pass
@@ -115,6 +120,15 @@ class Simulator:
     @output.setter
     def output(self, output: str) -> None: pass
     
+    # Subroutine and frames
+    @property
+    def frame_number(self) -> int: pass
+    @property
+    def frames(self) -> list[Frame]: pass
+
+    def get_subroutine_def(self, loc: int | str) -> SubroutineDef | None: pass
+    def set_subroutine_def(self, loc: int | str, defn: SubroutineDef) -> None: pass
+
     # from pylc3
     # TODO: determine if these are  necessary
     # @property
@@ -124,8 +138,6 @@ class Simulator:
 
     # def disassemble(self, addr: int, level: int) -> str: pass
     # def disassemble_data(self, addr: int, level: int) -> str: pass
-    
-    # def add_subroutine_info(self, subroutine_label: str, n_params: int) -> bool: pass
     
     # def first_level_calls(self) -> list[None]: pass
     # def first_level_traps(self) -> list[None]: pass
@@ -137,3 +149,24 @@ class SimError(ValueError):
 class MemoryFillType:
     Random: MemoryFillType
     Single: MemoryFillType
+
+class Frame:
+    @property
+    def caller_addr(self) -> int: pass
+    @property
+    def callee_addr(self) -> int: pass
+    @property
+    def frame_type(self) -> int: pass
+    @property
+    def frame_ptr(self) -> tuple[int, bool] | None: pass
+    @property
+    def arguments(self) -> list[tuple[int, bool]]: pass
+    pass
+class SubroutineType(enum.Enum):
+    CallingConvention: SubroutineType
+    PassByRegister: SubroutineType
+
+SubroutineDef: TypeAlias = (
+    tuple[Literal[SubroutineType.CallingConvention], list[str]] | 
+    tuple[Literal[SubroutineType.PassByRegister], list[tuple[str, int]], int | None]
+)
