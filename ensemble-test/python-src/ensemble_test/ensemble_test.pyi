@@ -71,11 +71,11 @@ class Simulator:
     def reverse_lookup(self, addr: int) -> str | None: pass
 
     # Breakpoints
-    def add_breakpoint(self, break_loc: int | str): pass
-    def remove_breakpoint(self, break_loc: int | str): pass
+    def add_breakpoint(self, break_loc: int | str) -> int: pass
+    def remove_breakpoint(self, break_id: int) -> bool: pass
     
     @property
-    def breakpoints(self) -> dict[int, None]: pass
+    def breakpoints(self) -> dict[int, int]: pass
     # Miscellaneous access
     @property
     def n(self) -> bool: pass

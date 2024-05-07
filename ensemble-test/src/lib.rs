@@ -4,10 +4,10 @@ use std::sync::{Arc, RwLock};
 use lc3_ensemble::asm::{assemble_debug, ObjectFile};
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::parse::parse_ast;
-use lc3_ensemble::sim::debug::{Breakpoint, Comparator};
+use lc3_ensemble::sim::debug::{Breakpoint, BreakpointKey};
 use lc3_ensemble::sim::io::BufferedIO;
-use lc3_ensemble::sim::mem::{MemAccessCtx, Word};
-use lc3_ensemble::sim::{SimErr, Simulator, WordCreateStrategy};
+use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
+use lc3_ensemble::sim::{SimErr, Simulator};
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 
@@ -363,36 +363,35 @@ impl PySimulator {
     }
 
     /// Adds a breakpoint to the given location.
-    fn add_breakpoint(&mut self, break_loc: BreakpointLocation) {
-        let m_addr = match break_loc {
-            BreakpointLocation::Address(addr) => Some(addr),
-            BreakpointLocation::Label(label)  => self.lookup(&label),
+    fn add_breakpoint(&mut self, break_loc: BreakpointLocation) -> PyResult<u64> {
+        let addr = match break_loc {
+            BreakpointLocation::Address(addr) => addr,
+            BreakpointLocation::Label(label)  => {
+                self.lookup(&label)
+                    .ok_or_else(|| PyValueError::new_err(format!("cannot add a breakpoint at non-existent label {label:?}")))?
+            },
         };
 
-        // TODO: error if label not found?
-        if let Some(addr) = m_addr {
-            self.sim.breakpoints.push(Breakpoint::PC(Comparator::eq(addr)));
-        }
+        Ok({
+            self.sim.breakpoints.insert(Breakpoint::PC(addr))
+                .as_ffi()
+        })
     }
-    /// Removes a breakpoint to the given location (if one exists).
-    fn remove_breakpoint(&mut self, break_loc: BreakpointLocation) {
-        let m_addr = match break_loc {
-            BreakpointLocation::Address(addr) => Some(addr),
-            BreakpointLocation::Label(label)  => self.lookup(&label),
-        };
-    
-        // TODO: error if label not found?
-        // TODO: error if breakpoint not found?
-        if let Some(addr) = m_addr {
-            self.sim.breakpoints.retain(|bp| {
-                bp != &Breakpoint::PC(Comparator::eq(addr))
-            })
-        }
+    /// Removes a breakpoint with the given ID.
+    /// 
+    /// This returns whether the removal was successful (i.e., whether there is a breakpoint at the given ID).
+    fn remove_breakpoint(&mut self, break_id: u64) -> bool {
+        self.sim.breakpoints.remove(BreakpointKey::from_ffi(break_id)).is_some()
     }
     
     /// Gets a list of currently defined breakpoints.
-    fn breakpoints(&self) -> Vec<u16> {
-        todo!()
+    fn breakpoints(&self) -> std::collections::HashMap<u16, u64> {
+        self.sim.breakpoints.iter()
+            .filter_map(|(k, bp)| match *bp {
+                Breakpoint::PC(addr) => Some((addr, k.as_ffi())),
+                _ => None
+            })
+            .collect()
     }
 
     /// The n condition code.
