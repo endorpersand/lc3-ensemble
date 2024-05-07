@@ -16,18 +16,24 @@ use super::{IODevice, SimErr, SimIOwMCR};
 /// 
 /// # Reading
 /// 
-/// A word's value can be read with [`Word::get`]
-/// to return its representation as an unsigned integer.
+/// A word's value can be read with:
+/// - [`Word::get`] to directly access the value, ignoring any initialization state
+/// - [`Word::get_if_init`] to directly access the value after verifying initialization state
 /// 
-/// This can be converted to a signed integer with typical `as` casting (`data as i16`).
+/// See the respective functions for more details.
+/// 
+/// Both functions return the unsigned representation of the word.
+/// If needed, this can be converted to a signed integer with typical `as` casting (`data as i16`).
 /// 
 /// # Writing
 /// 
-/// A word can be written into with a value or with another word.
+/// A word can be written into with a value or with another word:
 /// - [`Word::set`] to read a value into this word
-/// - [`Word::copy_word`] to read a word into this word
+/// - [`Word::set_if_init`] to read a word into this word
 /// 
-/// [`Word::copy_word`] may be more useful in situations where initialization state may want to be preserved.
+/// [`Word::set_if_init`] may be more useful in situations where initialization state needs to be preserved
+/// or when it needs to be verified.
+/// 
 /// See the respective functions for more details.
 /// 
 /// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
@@ -57,34 +63,6 @@ pub struct Word {
 const NO_BITS:  u16 = 0;
 const ALL_BITS: u16 = 1u16.wrapping_neg();
 
-/// Trait that describes types that can be used to create the data for an uninitialized [`Word`].
-/// 
-/// This is used with [`Word::new_uninit`] to create uninitialized Words.
-pub trait WordFiller {
-    /// Generate the data.
-    fn generate(&mut self) -> u16;
-}
-impl WordFiller for () {
-    /// This creates unseeded, non-deterministic values.
-    fn generate(&mut self) -> u16 {
-        rand::random()
-    }
-}
-impl WordFiller for u16 {
-    /// Sets each word to the given value.
-    fn generate(&mut self) -> u16 {
-        *self
-    }
-}
-impl WordFiller for StdRng {
-    /// This creates values from the standard random number generator.
-    /// 
-    /// This can be used to create deterministic, seeded values.
-    fn generate(&mut self) -> u16 {
-        self.gen()
-    }
-}
-
 impl Word {
     /// Creates a new word that is considered uninitialized.
     pub fn new_uninit(fill: &mut impl WordFiller) -> Self {
@@ -102,8 +80,49 @@ impl Word {
     }
 
     /// Reads the word, returning its unsigned representation.
+    /// 
+    /// The data is returned without checking for initialization state.
+    /// If the initialization state should be checked before trying to query the data,
+    /// then [`Word::get_if_init`] should be used instead.
     pub fn get(&self) -> u16 {
         self.data
+    }
+    /// Reads the word if it is properly initialized under strictness requirements, returning its unsigned representation.
+    /// 
+    /// This function is more cognizant of word initialization than [`Word::get`].
+    /// - In non-strict mode (`strict == false`), this function unconditionally allows access to the data regardless of initialization state.
+    /// - In strict mode (`strict == true`), this function verifies `self` is fully initialized, raising the provided error if not.
+    pub fn get_if_init(&self, strict: bool, err: SimErr) -> Result<u16, SimErr> {
+        match !strict || self.is_init() {
+            true  => Ok(self.data),
+            false => Err(err)
+        }
+    }
+
+    /// Writes to the word.
+    /// 
+    /// This sets the word to the `data` value assuming it is **fully** initialized
+    /// and correspondingly sets the initialization state to be fully initialized.
+    /// 
+    /// If the initialization state of the `data` value should be checked before
+    /// trying to write to the word, then [`Word::set_if_init`] should be used instead.
+    pub fn set(&mut self, data: u16) {
+        self.data = data;
+        self.init = ALL_BITS;
+    }
+    /// Writes to the word while verifying the data stored is properly initialized under strictness requirements.
+    /// 
+    /// This function is more cognizant of word initialization than [`Word::set`].
+    /// - In non-strict mode, this function preserves the initialization data of the `data` argument.
+    /// - In strict mode, this function verifies `data` is fully initialized, raising the provided error if not.
+    pub fn set_if_init(&mut self, data: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
+        match !strict || data.is_init() {
+            true => {
+                *self = data;
+                Ok(())
+            },
+            false => Err(err)
+        }
     }
 
     /// Checks that a word is fully initialized
@@ -113,32 +132,6 @@ impl Word {
     /// Clears initialization of this word.
     pub fn clear_init(&mut self) {
         self.init = NO_BITS;
-    }
-    /// Writes to the word.
-    /// 
-    /// The data provided is assumed to be FULLY initialized,
-    /// and will set the initialization state of this word to be
-    /// fully initialized.
-    /// 
-    /// If the data is not fully initialized (e.g., if it is a partially initialized word),
-    /// [`Word::copy_word`] can be used instead.
-    pub fn set(&mut self, data: u16) {
-        self.data = data;
-        self.init = ALL_BITS;
-    }
-    /// Copies the data from one word into another.
-    /// 
-    /// This function is more cognizant of word initialization than [`Word::set`].
-    /// - In non-strict mode, this function preserves the initialization data of the given word.
-    /// - In strict mode, this function verifies the word copied is fully initialized, raising the provided error if not.
-    pub fn copy_word(&mut self, word: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
-        match !strict || word.is_init() {
-            true => {
-                *self = word;
-                Ok(())
-            },
-            false => Err(err)
-        }
     }
 }
 impl From<u16> for Word {
@@ -301,28 +294,83 @@ impl std::ops::BitAndAssign for Word {
     }
 }
 
-pub(crate) trait AssertInit: Sized {
-    fn is_initialized(&self) -> bool;
-    fn assert_init<E>(self, strict: bool, err: E) -> Result<Self, E> {
-        match !strict || self.is_initialized() {
-            true  => Ok(self),
-            false => Err(err),
+/// Trait that describes types that can be used to create the data for an uninitialized [`Word`].
+/// 
+/// This is used with [`Word::new_uninit`] to create uninitialized Words.
+pub trait WordFiller {
+    /// Generate the data.
+    fn generate(&mut self) -> u16;
+}
+impl WordFiller for () {
+    /// This creates unseeded, non-deterministic values.
+    fn generate(&mut self) -> u16 {
+        rand::random()
+    }
+}
+impl WordFiller for u16 {
+    /// Sets each word to the given value.
+    fn generate(&mut self) -> u16 {
+        *self
+    }
+}
+impl WordFiller for StdRng {
+    /// This creates values from the standard random number generator.
+    /// 
+    /// This can be used to create deterministic, seeded values.
+    fn generate(&mut self) -> u16 {
+        self.gen()
+    }
+}
+/// Strategy used to initialize the `reg_file` and `mem` of the [`Simulator`].
+/// 
+/// These are used to set the initial state of the memory and registers,
+/// which will be treated as uninitialized until they are properly initialized
+/// by program code.
+/// 
+/// [`Simulator`]: super::Simulator
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum WordCreateStrategy {
+    /// Initializes each word randomly and non-deterministically.
+    #[default]
+    Unseeded,
+
+    /// Initializes each word randomly and deterministically.
+    Seeded {
+        /// The seed the RNG was initialized with.
+        seed: u64
+    },
+
+    /// Initializes each word to a known value.
+    Known {
+        /// The value to initialize each value to.
+        value: u16
+    }
+}
+
+impl WordCreateStrategy {
+    pub(super) fn generator(&self) -> impl WordFiller {
+        use rand::SeedableRng;
+
+        match self {
+            WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
+            WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
+            WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
         }
     }
 }
-impl AssertInit for &Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
-    }
+
+enum WCGenerator {
+    Unseeded,
+    Seeded(Box<rand::rngs::StdRng>),
+    Known(u16)
 }
-impl AssertInit for &mut Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
-    }
-}
-impl AssertInit for Word {
-    fn is_initialized(&self) -> bool {
-        self.is_init()
+impl WordFiller for WCGenerator {
+    fn generate(&mut self) -> u16 {
+        match self {
+            WCGenerator::Unseeded  => ().generate(),
+            WCGenerator::Seeded(r) => r.generate(),
+            WCGenerator::Known(k)  => k.generate(),
+        }
     }
 }
 
@@ -348,7 +396,7 @@ const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 /// Memory. This can be addressed with any `u16`.
 #[derive(Debug)]
 pub struct Mem {
-    pub(super) data: Box<[Word; N]>,
+    data: Box<[Word; N]>,
     pub(super) io: SimIOwMCR
 }
 impl Mem {
@@ -500,15 +548,14 @@ impl Mem {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
         let write_to_mem = if addr >= IO_START {
-            let io_data = data.assert_init(ctx.strict, SimErr::StrictIOSetUninit)?
-                .get();
+            let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
             self.io.io_write(addr, io_data)
         } else {
             true
         };
         if write_to_mem {
             self.data[usize::from(addr)]
-                .copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)?;
+                .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
         Ok(())
     }

@@ -170,6 +170,7 @@ impl lc3_ensemble::err::Error for ReportSimErr {
             SimErr::StrictMemSetUninit  => None,
             SimErr::StrictIOSetUninit   => None,
             SimErr::StrictJmpAddrUninit => None,
+            SimErr::StrictSRAddrUninit  => None,
             SimErr::StrictMemAddrUninit => None,
             SimErr::StrictPCCurrUninit  => Some("ensure there is a HALT instruction after your code".into()),
             SimErr::StrictPCNextUninit  => None,

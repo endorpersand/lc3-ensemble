@@ -151,14 +151,14 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "clap",
- "lc3-ensemble 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lc3-ensemble 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "ensemble-test"
 version = "0.1.0"
 dependencies = [
- "lc3-ensemble 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lc3-ensemble 0.3.0",
  "pyo3",
  "rand",
 ]
@@ -207,6 +207,8 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "lc3-ensemble"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "828834eca6fdd35143e6a2f90133a7f1551f1816ea1fb605c412a818bfd1ef23"
 dependencies = [
  "crossbeam-channel",
  "logos",
@@ -215,13 +217,24 @@ dependencies = [
 
 [[package]]
 name = "lc3-ensemble"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "828834eca6fdd35143e6a2f90133a7f1551f1816ea1fb605c412a818bfd1ef23"
+version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
  "logos",
  "rand",
+ "slotmap",
+]
+
+[[package]]
+name = "lc3-ensemble"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4970d35db6722a2c3d095bc2956e2369106252836f6feca1265d89a4b3bd7b99"
+dependencies = [
+ "crossbeam-channel",
+ "logos",
+ "rand",
+ "slotmap",
 ]
 
 [[package]]
@@ -456,6 +469,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "slotmap"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbff4acf519f630b3a3ddcfaea6c06b42174d9a44bc70c620e9ed1649d58b82a"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -507,6 +529,12 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "version_check"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "wasi"

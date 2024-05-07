@@ -7,10 +7,12 @@
 //! - [`mem`]: The module handling memory relating to the registers.
 //! - [`io`]: The module handling simulator IO.
 //! - [`debug`]: The module handling types of breakpoints for the simulator.
+//! - [`frame`]: The module handling the frame stack and call frame management.
 
 pub mod mem;
 pub mod io;
 pub mod debug;
+pub mod frame;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -21,8 +23,9 @@ use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 use io::*;
 
-use self::debug::Breakpoint;
-use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
+use self::debug::BreakpointList;
+use self::frame::{FrameStack, FrameType};
+use self::mem::{Mem, MemAccessCtx, RegFile, Word, WordCreateStrategy};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -61,6 +64,8 @@ pub enum SimErr {
     StrictIOSetUninit,
     /// Address to jump to is coming from an uninitialized value.
     StrictJmpAddrUninit,
+    /// Address to jump to (which is a subroutine or trap call) is coming from an uninitialized value.
+    StrictSRAddrUninit,
     /// Address to read from memory is coming from an uninitialized value.
     StrictMemAddrUninit,
     /// PC is pointing to an uninitialized value.
@@ -81,7 +86,8 @@ impl std::fmt::Display for SimErr {
             SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
             SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
             SimErr::StrictIOSetUninit   => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
-            SimErr::StrictJmpAddrUninit => f.write_str("PC address was set to uninitialized value (strict mode)"),
+            SimErr::StrictJmpAddrUninit => f.write_str("PC address was set to uninitialized address (strict mode)"),
+            SimErr::StrictSRAddrUninit  => f.write_str("Subroutine starts at uninitialized address (strict mode)"),
             SimErr::StrictMemAddrUninit => f.write_str("tried to access memory with an uninitialized address (strict mode)"),
             SimErr::StrictPCCurrUninit  => f.write_str("PC is pointing to uninitialized value (strict mode)"),
             SimErr::StrictPCNextUninit  => f.write_str("PC will point to uninitialized value when this instruction executes (strict mode)"),
@@ -91,64 +97,6 @@ impl std::fmt::Display for SimErr {
 }
 impl std::error::Error for SimErr {}
 
-/// Strategy used to initialize the `reg_file` and `mem` of the [`Simulator`].
-/// 
-/// These are used to set the initial state of the memory and registers,
-/// which will be treated as uninitialized until they are properly initialized
-/// by program code.
-#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
-pub enum WordCreateStrategy {
-    /// Initializes each word randomly and non-deterministically.
-    #[default]
-    Unseeded,
-
-    /// Initializes each word randomly and deterministically.
-    Seeded {
-        /// The seed the RNG was initialized with.
-        seed: u64
-    },
-
-    /// Generates a random value with the given seed and sets each word to that generated value.
-    SeededFill {
-        /// The seed the RNG was initialized with.
-        seed: u64
-    },
-
-    /// Initializes each word to a known value.
-    Known {
-        /// The value to initialize each value to.
-        value: u16
-    }
-}
-
-impl WordCreateStrategy {
-    fn generator(&self) -> WCGenerator {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
-        match self {
-            WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
-            WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
-            WordCreateStrategy::SeededFill { seed } => WCGenerator::Known(StdRng::seed_from_u64(*seed).gen()),
-            WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
-        }
-    }
-}
-
-enum WCGenerator {
-    Unseeded,
-    Seeded(Box<rand::rngs::StdRng>),
-    Known(u16)
-}
-impl mem::WordFiller for WCGenerator {
-    fn generate(&mut self) -> u16 {
-        match self {
-            WCGenerator::Unseeded  => ().generate(),
-            WCGenerator::Seeded(r) => r.generate(),
-            WCGenerator::Known(k)  => k.generate(),
-        }
-    }
-}
 /// Configuration flags for [`Simulator`].
 /// 
 /// These can be modified after the `Simulator` is created with [`Simulator::new`]
@@ -178,7 +126,12 @@ pub struct SimFlags {
     /// The creation strategy for uninitialized Words.
     /// 
     /// This is used to initialize the `mem` and `reg_file` fields.
-    pub word_create_strat: WordCreateStrategy
+    pub word_create_strat: WordCreateStrategy,
+
+    /// Whether to store debugging information about call frames.
+    /// 
+    /// This flag only goes into effect after a `Simulator::new` or `Simulator::reset` call.
+    pub debug_frames: bool
 }
 impl Default for SimFlags {
     /// The default flags.
@@ -186,8 +139,15 @@ impl Default for SimFlags {
     /// They are defined as follows:
     /// - `strict`: false
     /// - `use_real_halt`: false
+    /// - `word_create_strat`: default [`WordCreateStrategy`]
+    /// - `debug_frames`: false
     fn default() -> Self {
-        Self { strict: false, use_real_halt: false, word_create_strat: Default::default() }
+        Self {
+            strict: false,
+            use_real_halt: false,
+            word_create_strat: Default::default(),
+            debug_frames: false
+        }
     }
 }
 
@@ -211,16 +171,8 @@ pub struct Simulator {
     /// Saved stack pointer (the one currently not in use)
     saved_sp: Word,
 
-    /// The number of subroutines or trap calls we've entered.
-    /// 
-    /// This is incremented when JSR/JSRR/TRAP is called,
-    /// and decremented when RET/JMP R7/RTI is called.
-    /// 
-    /// If this is 0, this is considered the global state,
-    /// and as such, decrementing should have no effect.
-    /// 
-    /// I am hoping this is large enough that it doesn't overflow :)
-    sr_entered: u64,
+    /// The frame stack.
+    pub frame_stack: FrameStack,
 
     /// Configuration settings for the simulator.
     /// 
@@ -252,7 +204,7 @@ pub struct Simulator {
 
 
     /// Breakpoints for the simulator.
-    pub breakpoints: Vec<Breakpoint>,
+    pub breakpoints: BreakpointList,
 
     /// The number of instructions successfully run since this `Simulator` was initialized.
     /// 
@@ -269,7 +221,7 @@ pub struct Simulator {
     hit_breakpoint: bool,
 
     /// Indicates whether the OS has been loaded.
-    os_loaded: bool
+    os_loaded: bool,
 }
 impl Simulator where Simulator: Send + Sync {}
 
@@ -285,15 +237,15 @@ impl Simulator {
             pc: 0x3000,
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
-            sr_entered: 0,
+            frame_stack: FrameStack::new(flags.debug_frames),
             flags,
             alloca: Box::new([]),
             mcr: Arc::default(),
-            breakpoints: vec![],
+            breakpoints: Default::default(),
             instructions_run: 0,
             prefetch: false,
             hit_breakpoint: false,
-            os_loaded: false
+            os_loaded: false,
         };
 
         sim.load_os();
@@ -348,15 +300,14 @@ impl Simulator {
     
     /// Sets and initializes the IO handler.
     pub fn open_io<IO: Into<SimIO>>(&mut self, io: IO) {
-        let io = std::mem::replace(&mut self.mem.io.inner, io.into());
-        io.close()
+        self.mem.io.inner = io.into();
     }
 
     /// Closes the IO handler, waiting for it to close.
     pub fn close_io(&mut self) {
         self.open_io(EmptyIO) // the illusion of choice
     }
-    
+
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         use std::cmp::Ordering;
@@ -418,7 +369,7 @@ impl Simulator {
     /// This should be true when this function is used for instructions like `BR` and `JSR` 
     /// and should be false when this function is used to increment PC during fetch.
     pub fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
-        let addr = addr_word.assert_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?.get();
+        let addr = addr_word.get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
         if self.flags.strict && st_check_mem {
             // Check next memory value is initialized:
             if !self.mem.read(addr, self.default_mem_ctx())?.is_init() {
@@ -500,53 +451,68 @@ impl Simulator {
         
         self.psr.set_privileged(true);
         let mctx = self.default_mem_ctx();
-        let sp = &mut self.reg_file[R6];
 
-        *sp -= 1u16;
-        self.mem.write(sp.get(), Word::new_init(old_psr), mctx)?;
-        *sp -= 1u16;
-        self.mem.write(sp.get(), Word::new_init(old_pc), mctx)?;
+        // push PSR and PC to stack
+        let sp = self.reg_file[R6]
+            .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
+
+        self.reg_file[R6] -= 2u16;
+        self.mem.write(sp.wrapping_sub(1), Word::new_init(old_psr), mctx)?;
+        self.mem.write(sp.wrapping_sub(2), Word::new_init(old_pc), mctx)?;
         
         // set interrupt priority
         if let Some(prio) = priority {
             self.psr.set_priority(prio);
         }
 
-        self.sr_entered += 1;
-        let addr = self.mem.read(vect, self.default_mem_ctx())?;
-        self.set_pc(addr, true)
+        let addr = self.mem.read(vect, self.default_mem_ctx())?
+            .get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
+
+        let ft = match priority.is_some() {
+            true => FrameType::Interrupt,
+            false => FrameType::Trap,
+        };
+        self.frame_stack.push_frame(self.prefetch_pc(), vect, ft, &self.reg_file, &self.mem);
+        self.set_pc(Word::new_init(addr), true)
     }
 
-    /// Runs until the tripwire condition returns false (or any of the typical breaks occur)
-    fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
+    /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
+    /// 
+    /// The typical break conditions are:
+    /// - `HALT` is executed
+    /// - the MCR is set to false
+    /// - A breakpoint matches
+    pub fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
         self.hit_breakpoint = false;
         self.mcr.store(true, Ordering::Relaxed);
+
         // event loop
         // run until:
-        // 1. the MCR is set to 0
+        // 1. the MCR is set to false
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
-        while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-            match self.step() {
-                Ok(_) => {},
-                Err(SimErr::ProgramHalted) => break,
-                Err(e) => {
-                    self.mcr.store(false, Ordering::Release);
-                    return Err(e);
+        let result = 'outer: {
+            while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
+                match self.step() {
+                    Ok(_) => {},
+                    Err(SimErr::ProgramHalted) => break,
+                    Err(e) => break 'outer Err(e)
+                }
+    
+                // After executing, check that any breakpoints were hit.
+                if self.breakpoints.values().any(|bp| bp.check(self)) {
+                    self.hit_breakpoint = true;
+                    break;
                 }
             }
 
-            // After executing, check that any breakpoints were hit.
-            if self.breakpoints.iter().any(|bp| bp.check(self)) {
-                self.hit_breakpoint = true;
-                break;
-            }
-        }
+            Ok(())
+        };
     
         self.mcr.store(false, Ordering::Release);
-        Ok(())
+        result
     }
 
     /// Execute the program.
@@ -569,8 +535,7 @@ impl Simulator {
     fn step(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
         let word = self.mem.read(self.pc, self.default_mem_ctx())?
-            .assert_init(self.flags.strict, SimErr::StrictPCCurrUninit)?
-            .get();
+            .get_if_init(self.flags.strict, SimErr::StrictPCCurrUninit)?;
         let instr = SimInstr::decode(word)?;
 
         self.offset_pc(1, false)?;
@@ -590,7 +555,7 @@ impl Simulator {
                 };
 
                 let result = val1 + val2;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LD(dr, off) => {
@@ -598,7 +563,7 @@ impl Simulator {
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::ST(sr, off) => {
@@ -617,9 +582,9 @@ impl Simulator {
                 let addr = match op {
                     ImmOrReg::Imm(off) => Word::from(self.pc.wrapping_add_signed(off.get())),
                     ImmOrReg::Reg(br)  => self.reg_file[br],
-                };
-                self.sr_entered += 1;
-                self.set_pc(addr, true)?;
+                }.get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
+                self.frame_stack.push_frame(self.prefetch_pc(), addr, FrameType::Subroutine, &self.reg_file, &self.mem);
+                self.set_pc(Word::new_init(addr), true)?;
             },
             SimInstr::AND(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1];
@@ -629,24 +594,22 @@ impl Simulator {
                 };
 
                 let result = val1 & val2;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.reg_file[br]
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get()
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
                     .wrapping_add_signed(off.get());
                 let write_strict = self.flags.strict && br != R6 && !self.in_alloca(ea);
                 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STR(sr, br, off) => {
                 let ea = self.reg_file[br]
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get()
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
                     .wrapping_add_signed(off.get());
                 let write_ctx = MemAccessCtx {
                     strict: self.flags.strict && br != R6 && !self.in_alloca(ea),
@@ -659,17 +622,16 @@ impl Simulator {
             SimInstr::RTI => {
                 if self.psr.privileged() {
                     let mctx = self.default_mem_ctx();
-                    let sp = (&mut self.reg_file[R6])
-                        .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
 
-                    let pc = self.mem.read(sp.get(), mctx)?
-                        .assert_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?
-                        .get();
-                    *sp += 1u16;
-                    let psr = self.mem.read(sp.get(), mctx)?
-                        .assert_init(self.flags.strict, SimErr::StrictPSRSetUninit)?
-                        .get();
-                    *sp += 1u16;
+                    // Pop PC and PSR from the stack
+                    let sp = self.reg_file[R6]
+                        .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
+
+                    let pc = self.mem.read(sp, mctx)?
+                        .get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
+                    let psr = self.mem.read(sp.wrapping_add(1), mctx)?
+                        .get_if_init(self.flags.strict, SimErr::StrictPSRSetUninit)?;
+                    self.reg_file[R6] += 2u16;
 
                     self.pc = pc;
                     self.psr = PSR(psr);
@@ -678,7 +640,7 @@ impl Simulator {
                         std::mem::swap(&mut self.saved_sp, &mut self.reg_file[R6]);
                     }
 
-                    self.sr_entered = self.sr_entered.saturating_sub(1);
+                    self.frame_stack.pop_frame();
                 } else {
                     return Err(SimErr::PrivilegeViolation);
                 }
@@ -687,25 +649,23 @@ impl Simulator {
                 let val = self.reg_file[sr];
                 
                 let result = !val;
-                self.reg_file[dr].copy_word(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(result, self.flags.strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(result.get());
             },
             SimInstr::LDI(dr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get();
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
                 let val = self.mem.read(ea, self.default_mem_ctx())?;
-                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STI(sr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
-                    .assert_init(self.flags.strict, SimErr::StrictMemAddrUninit)?
-                    .get();
+                    .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_ctx = MemAccessCtx {
                     strict: self.flags.strict && !self.in_alloca(ea),
                     ..self.default_mem_ctx()
@@ -716,8 +676,8 @@ impl Simulator {
             },
             SimInstr::JMP(br) => {
                 // check for RET
-                if br.0 == 7 {
-                    self.sr_entered = self.sr_entered.saturating_sub(1);
+                if br.reg_no() == 7 {
+                    self.frame_stack.pop_frame();
                 }
                 let addr = self.reg_file[br];
                 self.set_pc(addr, true)?;
@@ -745,23 +705,23 @@ impl Simulator {
 
     /// Simulate one step, executing one instruction and running through entire subroutines as a single step.
     pub fn step_over(&mut self) -> Result<(), SimErr> {
-        let curr_frame = self.sr_entered;
+        let curr_frame = self.frame_stack.len();
         let mut first = Some(()); // is Some if this is the first instruction executed in this call
 
         // this function should do at least one step before checking its condition
         // condition: run until we have landed back in the same frame
-        self.run_while(|sim| first.take().is_some() || curr_frame < sim.sr_entered)
+        self.run_while(|sim| first.take().is_some() || curr_frame < sim.frame_stack.len())
     }
 
     /// Run through the simulator's execution until the subroutine is exited.
     pub fn step_out(&mut self) -> Result<(), SimErr> {
-        let curr_frame = self.sr_entered;
+        let curr_frame = self.frame_stack.len();
         let mut first = Some(()); // is Some if this is the first instruction executed in this call
         
         // this function should do at least one step before checking its condition
         // condition: run until we've landed in a smaller frame
         if curr_frame != 0 {
-            self.run_while(|sim| first.take().is_some() || curr_frame <= sim.sr_entered)?;
+            self.run_while(|sim| first.take().is_some() || curr_frame <= sim.frame_stack.len())?;
         }
 
         Ok(())

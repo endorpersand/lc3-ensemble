@@ -4,6 +4,7 @@ pub mod asm;
 pub mod sim;
 
 use std::fmt::Write as _;
+use std::num::TryFromIntError;
 use offset_base::OffsetBacking;
 
 /// A register. Must be between 0 and 7.
@@ -31,6 +32,12 @@ pub mod reg_consts {
     /// The 7th register in the register file.
     pub const R7: Reg = Reg(7);
 }
+impl Reg {
+    /// Gets the register number of this [`Reg`].
+    pub fn reg_no(self) -> u8 {
+        self.0
+    }
+}
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "R{}", self.0)
@@ -40,6 +47,17 @@ impl From<Reg> for usize {
     // Used for indexing the reg file in [`ast::Sim`].
     fn from(value: Reg) -> Self {
         usize::from(value.0)
+    }
+}
+impl TryFrom<u8> for Reg {
+    type Error = TryFromIntError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0..=7 => Ok(Reg(value)),
+            // HACKy, but there's no other way to create this error
+            _     => u8::try_from(256).map(|_| unreachable!("should've been TryFromIntError")),
+        }
     }
 }
 

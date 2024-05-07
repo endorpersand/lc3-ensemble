@@ -19,8 +19,9 @@ use std::ops::Range;
 use logos::Span;
 
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
+use crate::ast::reg_consts::R7;
 use crate::ast::sim::SimInstr;
-use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
+use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset};
 use crate::err::ErrSpan;
 
 
@@ -599,7 +600,7 @@ impl AsmInstr {
             AsmInstr::LDR(dr, br, off)  => Ok(SimInstr::LDR(dr, br, off)),
             AsmInstr::LEA(dr, off)      => Ok(SimInstr::LEA(dr, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::NOT(dr, sr)       => Ok(SimInstr::NOT(dr, sr)),
-            AsmInstr::RET               => Ok(SimInstr::JMP(Reg(0b111))),
+            AsmInstr::RET               => Ok(SimInstr::JMP(R7)),
             AsmInstr::RTI               => Ok(SimInstr::RTI),
             AsmInstr::ST(sr, off)       => Ok(SimInstr::ST(sr, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
