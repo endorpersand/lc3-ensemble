@@ -525,36 +525,43 @@ impl Simulator {
         self.set_pc(Word::new_init(addr), true)
     }
 
-    /// Runs until the tripwire condition returns false (or any of the typical breaks occur)
-    fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
+    /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
+    /// 
+    /// The typical break conditions are:
+    /// - `HALT` is executed
+    /// - the MCR is set to false
+    /// - A breakpoint matches
+    pub fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
         self.hit_breakpoint = false;
         self.mcr.store(true, Ordering::Relaxed);
+
         // event loop
         // run until:
-        // 1. the MCR is set to 0
+        // 1. the MCR is set to false
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
-        while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-            match self.step() {
-                Ok(_) => {},
-                Err(SimErr::ProgramHalted) => break,
-                Err(e) => {
-                    self.mcr.store(false, Ordering::Release);
-                    return Err(e);
+        let result = 'outer: {
+            while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
+                match self.step() {
+                    Ok(_) => {},
+                    Err(SimErr::ProgramHalted) => break,
+                    Err(e) => break 'outer Err(e)
+                }
+    
+                // After executing, check that any breakpoints were hit.
+                if self.breakpoints.values().any(|bp| bp.check(self)) {
+                    self.hit_breakpoint = true;
+                    break;
                 }
             }
 
-            // After executing, check that any breakpoints were hit.
-            if self.breakpoints.values().any(|bp| bp.check(self)) {
-                self.hit_breakpoint = true;
-                break;
-            }
-        }
+            Ok(())
+        };
     
         self.mcr.store(false, Ordering::Release);
-        Ok(())
+        result
     }
 
     /// Execute the program.
