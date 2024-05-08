@@ -508,9 +508,9 @@ impl PySimulator {
         self.sim.pc = addr;
     }
 
-    /// The number of executions since the simulator started running.
+    /// The number of instructions run since the simulator started running.
     #[getter]
-    fn get_executions(&self) -> u64 {
+    fn get_instructions_run(&self) -> u64 {
         self.sim.instructions_run
     }
 

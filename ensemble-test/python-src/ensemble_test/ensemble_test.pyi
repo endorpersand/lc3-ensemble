@@ -95,7 +95,7 @@ class Simulator:
     def pc(self, addr: int) -> None: pass
 
     @property
-    def executions(self) -> int: pass
+    def instructions_run(self) -> int: pass
 
     # Configuration settings
     @property

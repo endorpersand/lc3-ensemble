@@ -2,6 +2,7 @@
 Test case utility.
 """
 import dataclasses
+import enum
 import itertools
 import typing
 from .. import core
@@ -13,6 +14,8 @@ Flag to hide traceback from this file in unit tests.
 
 Useful for removing the tracebacks from helper functions here! :D
 """
+
+INSTRUCTION_RUN_LIMIT = 0xABCDE
 
 def _to_u16(val: int) -> int:
     return val & 0xFFFF
@@ -68,6 +71,15 @@ class LC3UnitTestCase(unittest.TestCase):
 
         self.assertEqual(expected_u, actual_u, msg)
     
+    def loadFile(self, fp: str):
+        self.sim.load_file(fp)
+    
+    def loadCode(self, src: str):
+        self.sim.load_code(src)
+
+    def runCode(self, max_instrs_run=INSTRUCTION_RUN_LIMIT):
+        self.sim.run(max_instrs_run)
+
     def writeMemValue(self, label: str, value: int):
         addr = self._lookup(label)
         self.sim.write_mem(addr, _to_u16(value))

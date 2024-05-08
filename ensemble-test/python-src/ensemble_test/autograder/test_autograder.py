@@ -5,7 +5,7 @@ from . import LC3UnitTestCase, CallNode
 
 class TestLC3Sample(LC3UnitTestCase):
     def test_reg(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             AND R0, R0, #0
             ADD R0, R0, #1
@@ -17,11 +17,11 @@ class TestLC3Sample(LC3UnitTestCase):
             HALT
             .end
         """)
-        self.sim.run()
+        self.runCode()
         self.assertReg(0, 32)
     
     def test_value(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             ONE:   .fill x1111
             TWO:   .fill x2222
@@ -40,7 +40,7 @@ class TestLC3Sample(LC3UnitTestCase):
             self.assertMemValue("five", 0x5555)
     
     def test_array(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             ARRAY: .fill x1234
                    .fill xCDE5
@@ -55,7 +55,7 @@ class TestLC3Sample(LC3UnitTestCase):
             self.assertArray("ARRAY", [0x0000, 0x0000, 0x0000, 0x0000])
 
     def test_str(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             GOOD_STRINGY: 
                 .stringz "HELLO!"
@@ -64,7 +64,7 @@ class TestLC3Sample(LC3UnitTestCase):
         self.assertString("GOOD_STRINGY", "HELLO!")
 
     def test_str_failures(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             GOOD_STRINGY: 
                 .stringz "HELLO!"
@@ -109,7 +109,7 @@ class TestLC3Sample(LC3UnitTestCase):
         
 
     def test_output(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
             LD R1, _126
             NOT R1, R1
@@ -129,11 +129,11 @@ class TestLC3Sample(LC3UnitTestCase):
             _126: .fill 126
             .end
         """)
-        self.sim.run()
+        self.runCode()
         self.assertConsoleOutput(''.join([chr(i) for i in range(32, 127)]))
 
     def test_pc(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
                 NOP
                 NOP
@@ -142,18 +142,18 @@ class TestLC3Sample(LC3UnitTestCase):
             .end
         """)
 
-        self.sim.run()
+        self.runCode()
         self.assertPC(0x3003)
     
     def test_cc(self):
-        self.sim.load_code("""
+        self.loadCode("""
             .orig x3000
                 AND R0, R0, #0
                 ADD R0, R0, #-1
                 HALT
             .end
         """)
-        self.sim.run()
+        self.runCode()
 
         # cc failure
         with self.assertRaises(ValueError):
@@ -163,7 +163,7 @@ class TestLC3Sample(LC3UnitTestCase):
         self.assertCondCode("n")
     
     def test_call_sr_standard_cc(self):
-        self.sim.load_file("test-asm/sumtorial-lc3cc.asm")
+        self.loadFile("test-asm/sumtorial-lc3cc.asm")
         
 
         # assert callSubroutine errors if no defined SR
@@ -198,12 +198,12 @@ class TestLC3Sample(LC3UnitTestCase):
         for N in range(15):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
-            self.sim.run()
+            self.runCode()
             self.assertReg(6, 0xD000)
             self.assertReg(0, N * (N + 1) // 2)
 
     def test_call_sr_pass_by_register(self):
-        self.sim.load_file("test-asm/sumtorial-pbr.asm")
+        self.loadFile("test-asm/sumtorial-pbr.asm")
 
         # ---------------------------------------------
         self.defineSubroutine("SUMTORIAL", {0: "n"}, ret=0)
@@ -232,12 +232,12 @@ class TestLC3Sample(LC3UnitTestCase):
         for N in range(15):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
-            self.sim.run()
+            self.runCode()
             self.assertReg(6, 0xD000)
             self.assertReg(0, N * (N + 1) // 2)
     
     def test_call_sr_standard_cc_other(self):
-        self.sim.load_file("test-asm/double-quad-lc3cc.asm")
+        self.loadFile("test-asm/double-quad-lc3cc.asm")
 
         # ---------------------------------------------
         self.defineSubroutine("DOUBLE", ["n"])
@@ -262,7 +262,7 @@ class TestLC3Sample(LC3UnitTestCase):
         for N in range(15):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
-            self.sim.run()
+            self.runCode()
             self.assertReg(6, 0xD000)
             self.assertReg(0, 4 * N)
 
