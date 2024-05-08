@@ -2,7 +2,7 @@ workspace = { members = ["ensemble-cli"] }
 [package]
 name = "lc3-ensemble"
 rust-version="1.70"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT"
 description = "LC-3 parser, assembler, and simulator intended for Georgia Tech's CS 2110 course"

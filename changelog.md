@@ -1,3 +1,9 @@
+# 0.4.1 (May 8, 2024)
+
+- Fix bug from 0.4.0 where the frame pointer wasn't being computed correctly when tracking a subroutine under standard calling convention
+- Fix [the JSRR R7 bug](https://github.com/gt-cs2110/lc3tools/commit/fa9a23f62106eeee9fef7d2a278ba989356c9ee2)
+- Create `Simulator::call_subroutine`
+
 # 0.4.0 (May 7, 2024)
 
 - IO revisions
