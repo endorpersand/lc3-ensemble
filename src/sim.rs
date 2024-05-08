@@ -424,6 +424,30 @@ impl Simulator {
         MemAccessCtx { privileged: self.psr.privileged(), strict: self.flags.strict }
     }
 
+    /// Calls a subroutine.
+    /// 
+    /// This does all the steps for calling a subroutine, namely:
+    /// - Setting the PC to the subroutine's start address
+    /// - Setting R7 to the original PC (return address)
+    /// - Adding information to the frame stack
+    pub fn call_subroutine(&mut self, addr: u16) -> Result<(), SimErr> {
+        self.reg_file[R7].set(self.pc);
+        self.frame_stack.push_frame(self.prefetch_pc(), addr, FrameType::Subroutine, &self.reg_file, &self.mem);
+        self.set_pc(Word::new_init(addr), true)
+    }
+
+    /// Calls a trap or interrupt, adding information to the frame stack
+    /// and setting the PC to the start of the trap/interrupt handler.
+    /// 
+    /// `0x00-0xFF` represents a trap,
+    /// `0x100-0x1FF` represents an interrupt.
+    fn call_interrupt(&mut self, vect: u16, ft: FrameType) -> Result<(), SimErr> {
+        let addr = self.mem.read(vect, self.default_mem_ctx())?
+            .get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
+
+        self.frame_stack.push_frame(self.prefetch_pc(), vect, ft, &self.reg_file, &self.mem);
+        self.set_pc(Word::new_init(addr), true)
+    }
     /// Interrupt, trap, and exception handler.
     /// 
     /// If priority is none, this will unconditionally initialize the trap or exception handler.
@@ -465,15 +489,11 @@ impl Simulator {
             self.psr.set_priority(prio);
         }
 
-        let addr = self.mem.read(vect, self.default_mem_ctx())?
-            .get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
-
         let ft = match priority.is_some() {
             true => FrameType::Interrupt,
             false => FrameType::Trap,
         };
-        self.frame_stack.push_frame(self.prefetch_pc(), vect, ft, &self.reg_file, &self.mem);
-        self.set_pc(Word::new_init(addr), true)
+        self.call_interrupt(vect, ft)
     }
 
     /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
@@ -584,11 +604,8 @@ impl Simulator {
                     ImmOrReg::Imm(off) => Word::from(self.pc.wrapping_add_signed(off.get())),
                     ImmOrReg::Reg(br)  => self.reg_file[br],
                 }.get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
-                
-                // read R7 before writing R7
-                self.reg_file[R7].set(self.pc);
-                self.frame_stack.push_frame(self.prefetch_pc(), addr, FrameType::Subroutine, &self.reg_file, &self.mem);
-                self.set_pc(Word::new_init(addr), true)?;
+
+                self.call_subroutine(addr)?;
             },
             SimInstr::AND(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1];
