@@ -577,12 +577,16 @@ impl Simulator {
                 self.mem.write(ea, val, write_ctx)?;
             },
             SimInstr::JSR(op) => {
-                self.reg_file[R7].set(self.pc);
+                // Note: JSRR R7 jumps to address at R7, then sets PC to R7.
+                // Refer to: https://github.com/gt-cs2110/lc3tools/commit/fa9a23f62106eeee9fef7d2a278ba989356c9ee2
 
                 let addr = match op {
                     ImmOrReg::Imm(off) => Word::from(self.pc.wrapping_add_signed(off.get())),
                     ImmOrReg::Reg(br)  => self.reg_file[br],
                 }.get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
+                
+                // read R7 before writing R7
+                self.reg_file[R7].set(self.pc);
                 self.frame_stack.push_frame(self.prefetch_pc(), addr, FrameType::Subroutine, &self.reg_file, &self.mem);
                 self.set_pc(Word::new_init(addr), true)?;
             },
