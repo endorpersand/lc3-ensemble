@@ -128,7 +128,8 @@ class Simulator:
 
     def get_subroutine_def(self, loc: int | str) -> SubroutineDef | None: pass
     def set_subroutine_def(self, loc: int | str, defn: SubroutineDef) -> None: pass
-
+    def call_subroutine(self, loc: int | str) -> None: pass
+    
     # from pylc3
     # TODO: determine if these are  necessary
     # @property

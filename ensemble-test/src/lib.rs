@@ -601,6 +601,15 @@ impl PySimulator {
         Ok(())
     }
 
+    /// Calls the subroutine located at the provided location, updating the PC and return address.
+    fn call_subroutine(&mut self, loc: MemLocation) -> PyResult<()> {
+        let addr = self.resolve_location(loc)
+            .map_err(|label| PyValueError::new_err(format!("cannot call subroutine at non-existent label {label:?}")))?;
+
+        self.sim.call_subroutine(addr)
+            .map_err(|e| SimError::from_lc3_err(e, self.sim.prefetch_pc()))
+    }
+
     /// Gets the total number of frames entered (the number of subroutine/trap calls we're currently deep in)
     #[getter]
     fn get_frame_number(&self) -> u64 {

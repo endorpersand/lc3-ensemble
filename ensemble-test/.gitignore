@@ -1,6 +1,7 @@
 /target
 
 *.asm
+!test-asm/*.asm
 .env
 .github
 

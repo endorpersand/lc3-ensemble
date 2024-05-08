@@ -1,6 +1,7 @@
 """
 Test case utility.
 """
+import dataclasses
 import itertools
 import typing
 from .. import core
@@ -24,6 +25,13 @@ def _require_ascii_string(string: str, *, arg_desc: str | None = None) -> bytes:
     except UnicodeEncodeError:
         arg_desc = arg_desc or f"string parameter ({string=!r})"
         raise ValueError(f"{arg_desc} should be an ASCII string")
+
+@dataclasses.dataclass
+class CallNode:
+    frame_no: int
+    callee: int
+    args: list[int]
+    ret: int | None = None
     
 class LC3UnitTestCase(unittest.TestCase):
     def setUp(self):
@@ -183,3 +191,84 @@ class LC3UnitTestCase(unittest.TestCase):
             actual = "p"
 
         self.assertEqual(expected, actual, f"Expected condition code to be {expected}, but it was {actual}")
+    
+    def defineSubroutine(self, loc: int | str, params: list[str] | dict[int, str], ret: int | None = None):
+        if isinstance(params, list):
+            defn = (core.SubroutineType.CallingConvention, params)
+        else:
+            param_list = [(v, k) for (k, v) in params.items()]
+            defn = (core.SubroutineType.PassByRegister, param_list, ret)
+        
+        self.sim.set_subroutine_def(loc, defn)
+    
+    def _get_return_value(self, callee: int) -> int | None:
+        defn = self.sim.get_subroutine_def(callee)
+
+        if defn is not None:
+            if defn[0] == core.SubroutineType.CallingConvention:
+                ret = self.sim.get_mem(self.sim.r6)
+            elif defn[0] == core.SubroutineType.PassByRegister:
+                _, _, ret_reg = defn
+                ret = self.sim.get_reg(ret_reg) if ret_reg is not None else None
+            else:
+                raise NotImplementedError(f"_get_return_value: unimplemented subroutine type {defn[0]}")
+            
+            return ret
+
+    def callSubroutine(self, label: str, args: list[int]) -> list[CallNode]:
+        R5, R6, R7 = 0x5555, 0x6666, 0x7777
+        addr = self._lookup(label)
+        defn = self.sim.get_subroutine_def(addr)
+
+        self.sim.r5 = R5
+        self.sim.r6 = R6
+
+        if defn is None:
+            raise ValueError(f"No definition provided for subroutine {label.upper()!r}. Provide one with self.defineSubroutine.")
+        # Write arguments in:
+        elif defn[0] == core.SubroutineType.CallingConvention:
+            params = defn[1]
+            if len(params) != len(args):
+                raise ValueError(
+                    f"Number of arguments provided ({len(args)}) does not match "
+                    f"the number of parameters subroutine {label.upper()!r} accepts ({len(params)})"
+                )
+            
+            self.sim.r6 -= len(args)
+            for i, arg in enumerate(args):
+                self.sim.write_mem(self.sim.r6 + i, _to_u16(arg))
+        elif defn[0] == core.SubroutineType.PassByRegister:
+            params = defn[1]
+            if len(params) != len(args):
+                raise ValueError(
+                    f"Number of arguments provided ({len(args)}) does not match "
+                    f"the number of parameters subroutine {label.upper()!r} accepts ({len(params)})"
+                )
+            
+            for (_, reg_no), arg in zip(params, args):
+                self.sim.set_reg(reg_no, _to_u16(arg))
+        else:
+            raise NotImplementedError(f"callSubroutine: unimplemented subroutine type {defn[0]}")
+        
+        self.sim.pc = R7
+        self.sim.call_subroutine(addr)
+        
+        path: list[CallNode] = [CallNode(frame_no=self.sim.frame_number, callee=addr, args=list(args))]
+        curr_path: list[CallNode] = [*path]
+
+        while self.sim.frame_number >= path[0].frame_no:
+            last_frame_no = self.sim.frame_number
+            self.sim._run_until_frame_change()
+
+            if self.sim.frame_number > last_frame_no:
+                node = CallNode(frame_no=self.sim.frame_number, callee=self.sim.pc, args=[d for d, _ in self.sim.frames[-1].arguments])
+                path.append(node)
+                curr_path.append(node)
+            
+            if self.sim.frame_number < last_frame_no:
+                node = curr_path.pop()
+                node.ret = self._get_return_value(node.callee)
+        path[0].ret = self._get_return_value(path[0].callee)
+
+        # TODO: better interface than list[CallNode]
+        return path

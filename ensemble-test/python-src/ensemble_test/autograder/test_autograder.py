@@ -1,5 +1,7 @@
 import unittest
-from . import LC3UnitTestCase
+
+from ensemble_test import core
+from . import LC3UnitTestCase, CallNode
 
 class TestLC3Sample(LC3UnitTestCase):
     def test_reg(self):
@@ -159,6 +161,111 @@ class TestLC3Sample(LC3UnitTestCase):
         
         # cc success
         self.assertCondCode("n")
+    
+    def test_call_sr_standard_cc(self):
+        self.sim.load_file("test-asm/sumtorial-lc3cc.asm")
+        
+
+        # assert callSubroutine errors if no defined SR
+        with self.assertRaises(ValueError) as e:
+            self.callSubroutine("SUMTORIAL", [15])
+            self.assertIn("No definition provided", str(e.exception))
+
+        # ---------------------------------------------
+        self.defineSubroutine("SUMTORIAL", ["n"])
+
+        # assert callSubroutine errors if wrong number of arguments
+        with self.assertRaises(ValueError) as e:
+            self.callSubroutine("SUMTORIAL", [15, 77, 99, 14])
+            self.assertIn("Number of arguments provided", str(e.exception))
+
+        # test callSubroutine success
+        sumtorial_addr = self._lookup("SUMTORIAL")
+
+        self.assertEqual(
+            self.callSubroutine("SUMTORIAL", [3]),
+            [
+                CallNode(frame_no=1, callee=sumtorial_addr, args=[3], ret=6),
+                CallNode(frame_no=2, callee=sumtorial_addr, args=[2], ret=3),
+                CallNode(frame_no=3, callee=sumtorial_addr, args=[1], ret=1),
+                CallNode(frame_no=4, callee=sumtorial_addr, args=[0], ret=0),
+            ],
+            "subroutine call did not match expected call stack"
+        )
+
+        # ---------------------------------------------
+        # suppose we ran it normally:
+        for N in range(15):
+            self.sim.pc = 0x3000
+            self.writeMemValue("N", N)
+            self.sim.run()
+            self.assertReg(6, 0xD000)
+            self.assertReg(0, N * (N + 1) // 2)
+
+    def test_call_sr_pass_by_register(self):
+        self.sim.load_file("test-asm/sumtorial-pbr.asm")
+
+        # ---------------------------------------------
+        self.defineSubroutine("SUMTORIAL", {0: "n"}, ret=0)
+
+        # assert callSubroutine errors if wrong number of arguments
+        with self.assertRaises(ValueError) as e:
+            self.callSubroutine("SUMTORIAL", [15, 77, 99, 14])
+            self.assertIn("Number of arguments provided", str(e.exception))
+
+        # test callSubroutine success
+        sumtorial_addr = self._lookup("SUMTORIAL")
+
+        self.assertEqual(
+            self.callSubroutine("SUMTORIAL", [3]),
+            [
+                CallNode(frame_no=1, callee=sumtorial_addr, args=[3], ret=6),
+                CallNode(frame_no=2, callee=sumtorial_addr, args=[2], ret=3),
+                CallNode(frame_no=3, callee=sumtorial_addr, args=[1], ret=1),
+                CallNode(frame_no=4, callee=sumtorial_addr, args=[0], ret=0),
+            ],
+            "subroutine call did not match expected call stack"
+        )
+
+        # ---------------------------------------------
+        # suppose we ran it normally:
+        for N in range(15):
+            self.sim.pc = 0x3000
+            self.writeMemValue("N", N)
+            self.sim.run()
+            self.assertReg(6, 0xD000)
+            self.assertReg(0, N * (N + 1) // 2)
+    
+    def test_call_sr_standard_cc_other(self):
+        self.sim.load_file("test-asm/double-quad-lc3cc.asm")
+
+        # ---------------------------------------------
+        self.defineSubroutine("DOUBLE", ["n"])
+        self.defineSubroutine("QUADRUPLE", ["n"])
+
+        # test callSubroutine success
+        double_addr = self._lookup("DOUBLE")
+        quadruple_addr = self._lookup("QUADRUPLE")
+
+        self.assertEqual(
+            self.callSubroutine("QUADRUPLE", [3]),
+            [
+                CallNode(frame_no=1, callee=quadruple_addr, args=[3], ret=12),
+                CallNode(frame_no=2, callee=double_addr, args=[3], ret=6),
+                CallNode(frame_no=2, callee=double_addr, args=[6], ret=12),
+            ],
+            "subroutine call did not match expected call stack"
+        )
+
+        # ---------------------------------------------
+        # suppose we ran it normally:
+        for N in range(15):
+            self.sim.pc = 0x3000
+            self.writeMemValue("N", N)
+            self.sim.run()
+            self.assertReg(6, 0xD000)
+            self.assertReg(0, 4 * N)
+
 
 if __name__ == "__main__":
     unittest.main()
