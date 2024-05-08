@@ -266,7 +266,7 @@ impl FrameStack {
                 Some(plist @ ParameterList::CallingConvention { .. }) => {
                     // Strictness: We'll let the simulator handle strictness around this,
                     // because we don't want to trigger an error if frame information is incorrect.
-                    let fp = regs[R6] + Word::new_init(4);
+                    let fp = regs[R6] - Word::new_init(4);
                     (Some(fp), plist.get_arguments(regs, mem, fp.get()))
                 },
                 Some(plist @ ParameterList::PassByRegister { .. }) => {
