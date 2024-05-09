@@ -130,6 +130,9 @@ class Simulator:
     def set_subroutine_def(self, loc: int | str, defn: SubroutineDef) -> None: pass
     def call_subroutine(self, loc: int | str) -> None: pass
     
+    def hit_halt(self) -> bool: pass
+    def hit_breakpoint(self) -> bool: pass
+    
     # from pylc3
     # TODO: determine if these are  necessary
     # @property

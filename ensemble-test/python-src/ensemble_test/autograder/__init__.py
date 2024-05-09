@@ -290,7 +290,7 @@ class LC3UnitTestCase(unittest.TestCase):
         path: list[CallNode] = [CallNode(frame_no=self.sim.frame_number, callee=addr, args=list(args))]
         curr_path: list[CallNode] = [*path]
 
-        while self.sim.frame_number >= path[0].frame_no:
+        while self.sim.frame_number >= path[0].frame_no and not self.sim.hit_halt():
             last_frame_no = self.sim.frame_number
             self.sim._run_until_frame_change()
 
@@ -304,11 +304,17 @@ class LC3UnitTestCase(unittest.TestCase):
                 node.ret = self._get_return_value(node.callee)
         path[0].ret = self._get_return_value(path[0].callee)
 
+        if self.sim.hit_halt():
+            self.fail(f"Program halted before completing execution of subroutine {label!r}")
+
         # TODO: better interface than list[CallNode]
         return path
     
     def assertCallsCorrect(self): pass
     def assertRegsPreserved(self): pass
     def assertStackCorrect(self): pass
-    def assertHalted(self): pass
-    def assertReturned(self): pass
+    def assertHalted(self):
+        if not self.sim.hit_halt():
+            self.fail("Program did not halt correctly")
+    def assertReturned(self):
+        self.assertPC(self.sim.r7)

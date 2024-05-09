@@ -637,4 +637,13 @@ impl PySimulator {
 
         Some(frames)
     }
+
+    /// Returns true if last execution hit HALT.
+    fn hit_halt(&self) -> bool {
+        self.sim.hit_halt()
+    }
+    /// Returns true if last execution hit a breakpoint.
+    fn hit_breakpoint(&self) -> bool {
+        self.sim.hit_breakpoint()
+    }
 }

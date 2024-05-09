@@ -18,6 +18,7 @@ class TestLC3Sample(LC3UnitTestCase):
             .end
         """)
         self.runCode()
+        self.assertHalted()
         self.assertReg(0, 32)
     
     def test_value(self):
@@ -130,6 +131,7 @@ class TestLC3Sample(LC3UnitTestCase):
             .end
         """)
         self.runCode()
+        self.assertHalted()
         self.assertConsoleOutput(''.join([chr(i) for i in range(32, 127)]))
 
     def test_pc(self):
@@ -143,6 +145,7 @@ class TestLC3Sample(LC3UnitTestCase):
         """)
 
         self.runCode()
+        self.assertHalted()
         self.assertPC(0x3003)
     
     def test_cc(self):
@@ -199,6 +202,7 @@ class TestLC3Sample(LC3UnitTestCase):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
             self.runCode()
+            self.assertHalted()
             self.assertReg(6, 0xD000)
             self.assertReg(0, N * (N + 1) // 2)
 
@@ -233,6 +237,7 @@ class TestLC3Sample(LC3UnitTestCase):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
             self.runCode()
+            self.assertHalted()
             self.assertReg(6, 0xD000)
             self.assertReg(0, N * (N + 1) // 2)
     
@@ -263,6 +268,7 @@ class TestLC3Sample(LC3UnitTestCase):
             self.sim.pc = 0x3000
             self.writeMemValue("N", N)
             self.runCode()
+            self.assertHalted()
             self.assertReg(6, 0xD000)
             self.assertReg(0, 4 * N)
 
@@ -274,10 +280,19 @@ class TestLC3Sample(LC3UnitTestCase):
         try:
             self.runCode()
         except core.SimError as e:
-            print(e)
             self._print_stack_frame()
-            self.assertTrue(False)
+            self.fail(e)
         self.assertReg(0, 2)
+    
+    def test_loop(self):
+        self.loadCode("""
+            .orig x3000
+            THIS BR THIS
+            .end
+        """)
+
+        self.runCode()
+        self.assertHalted()
 
 if __name__ == "__main__":
     unittest.main()
