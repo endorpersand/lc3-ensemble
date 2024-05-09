@@ -138,6 +138,22 @@ impl std::fmt::Debug for SimInterrupt {
     }
 }
 
+/// Reason for why execution paused if it wasn't due to an error.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+enum PauseCondition {
+    /// Program reached a halt.
+    Halt,
+    /// Program set MCR to off.
+    MCROff,
+    /// Program hit a breakpoint.
+    Breakpoint,
+    /// Program hit a tripwire condition.
+    Tripwire,
+    /// Program hit an error and did not pause successfully.
+    #[default]
+    Unsuccessful
+}
+
 /// Configuration flags for [`Simulator`].
 /// 
 /// These can be modified after the `Simulator` is created with [`Simulator::new`]
@@ -243,8 +259,9 @@ pub struct Simulator {
     /// the PC of the instruction that caused an error. See [`Simulator::prefetch_pc`].
     prefetch: bool,
 
-    /// Indicates whether the last execution hit a breakpoint.
-    hit_breakpoint: bool,
+    /// Indicates the reason why the last execution (via [`Simulator::run_while`] and adjacent)
+    /// had paused.
+    pause_condition: PauseCondition,
 
     /// Indicates whether the OS has been loaded.
     os_loaded: bool,
@@ -296,7 +313,7 @@ impl Simulator {
             alloca: Box::new([]),
             instructions_run: 0,
             prefetch: false,
-            hit_breakpoint: false,
+            pause_condition: Default::default(),
             os_loaded: false,
             mcr,
             flags,
@@ -488,7 +505,16 @@ impl Simulator {
 
     /// Indicates whether the last execution of the simulator hit a breakpoint.
     pub fn hit_breakpoint(&self) -> bool {
-        self.hit_breakpoint
+        matches!(self.pause_condition, PauseCondition::Breakpoint)
+    }
+
+    /// Indicates whether the last execution of the simulator resulted in a HALT successfully occurring.
+    /// 
+    /// This is defined as:
+    /// - `HALT` being executed while virtual HALTs are enabled
+    /// - `MCR` being set to `x0000` during the execution of the program.
+    pub fn hit_halt(&self) -> bool {
+        matches!(self.pause_condition, PauseCondition::Halt | PauseCondition::MCROff)
     }
 
     /// Computes the default memory access context, 
@@ -600,7 +626,7 @@ impl Simulator {
     pub fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
-        self.hit_breakpoint = false;
+        std::mem::take(&mut self.pause_condition);
         self.mcr.store(true, Ordering::Relaxed);
 
         // event loop
@@ -608,26 +634,32 @@ impl Simulator {
         // 1. the MCR is set to false
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
-        let result = 'outer: {
-            while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-                match self.step() {
-                    Ok(_) => {},
-                    Err(SimErr::ProgramHalted) => break,
-                    Err(e) => break 'outer Err(e)
-                }
-    
-                // After executing, check that any breakpoints were hit.
-                if self.breakpoints.values().any(|bp| bp.check(self)) {
-                    self.hit_breakpoint = true;
-                    break;
-                }
+        let result = loop {
+            // MCR turned off:
+            if !self.mcr.load(Ordering::Relaxed) {
+                break Ok(PauseCondition::MCROff);
+            }
+            // Tripwire turned off:
+            if !tripwire(self) {
+                break Ok(PauseCondition::Tripwire);
+            }
+            
+            // Run a step:
+            match self.step() {
+                Ok(_) => {},
+                Err(SimErr::ProgramHalted) => break Ok(PauseCondition::Halt),
+                Err(e) => break Err(e)
             }
 
-            Ok(())
+            // After executing, check that any breakpoints were hit.
+            if self.breakpoints.values().any(|bp| bp.check(self)) {
+                break Ok(PauseCondition::Breakpoint);
+            }
         };
     
         self.mcr.store(false, Ordering::Release);
-        result
+        self.pause_condition = result?;
+        Ok(())
     }
 
     /// Execute the program.
