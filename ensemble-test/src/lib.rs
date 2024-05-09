@@ -9,7 +9,7 @@ use lc3_ensemble::sim::debug::Breakpoint;
 use lc3_ensemble::sim::frame::{Frame, ParameterList};
 use lc3_ensemble::sim::io::BufferedIO;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
-use lc3_ensemble::sim::{SimErr, SimFlags, Simulator};
+use lc3_ensemble::sim::{InterruptErr, SimErr, SimFlags, Simulator};
 use pyo3::types::PyInt;
 use pyo3::{create_exception, prelude::*};
 use pyo3::exceptions::{PyIndexError, PyValueError};
@@ -47,8 +47,18 @@ impl LoadError {
     }
 }
 impl SimError {
-    fn from_lc3_err(e: SimErr, pc: u16) -> PyErr {
-        SimError::new_err(format!("{e} (PC: x{:04X})", pc))
+    fn from_display(err: impl std::fmt::Display, pc: u16) -> PyErr {
+        SimError::new_err(format!("{err} (PC: x{pc:04X})"))
+    }
+
+    fn from_lc3_err(err: SimErr, pc: u16) -> PyErr {
+        match err {
+            SimErr::Interrupt(e) => match e.into_inner().downcast() {
+                Ok(py_err) => *py_err,
+                Err(e) => SimError::from_display(e, pc),
+            },
+            e => SimError::from_display(e, pc)
+        }
     }
 }
 
@@ -172,7 +182,10 @@ impl PySimulator {
 
         let io = BufferedIO::with_bufs(Arc::clone(&self.input), Arc::clone(&self.output));
         self.sim.open_io(io);
-        
+        self.sim.add_external_interrupt(|_| {
+            Python::with_gil(|py| py.check_signals())
+                .map_err(InterruptErr::new)
+        });
         self.obj.take();
 
         self.input.write().unwrap_or_else(|e| e.into_inner()).clear();
