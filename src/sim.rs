@@ -195,6 +195,9 @@ impl Default for SimFlags {
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
+    // ------------------ SIMULATION STATE ------------------
+    // Calling [`Simulator::reset`] resets these values.
+
     /// The simulator's memory.
     /// 
     /// Note that this is held in the heap, as it is too large for the stack.
@@ -215,20 +218,6 @@ pub struct Simulator {
     /// The frame stack.
     pub frame_stack: FrameStack,
 
-    /// Configuration settings for the simulator.
-    /// 
-    /// These are preserved between resets.
-    /// 
-    /// See [`SimFlags`] for more details on what configuration
-    /// settings are available.
-    pub flags: SimFlags,
-
-    /// Machine control.
-    /// If unset, the program stops.
-    /// 
-    /// This is publicly accessible via a reference through [`Simulator::mcr`].
-    mcr: Arc<AtomicBool>,
-
     /// Allocated blocks in object file.
     /// 
     /// This field keeps track of "allocated" blocks 
@@ -242,15 +231,6 @@ pub struct Simulator {
     /// This is technically a bit lax, because it lets them write
     /// into instructions but oops.
     alloca: Box<[(u16, u16)]>,
-
-    /// Breakpoints for the simulator.
-    pub breakpoints: BreakpointList,
-
-    /// Functions that are run every step that can pause execution of the `Simulator`.
-    /// 
-    /// When an [`InterruptErr`] is raised, the simulation will raise [`SimErr::Interrupt`],
-    /// which can be used to handle the resulting `InterruptErr`.
-    external_interrupts: Vec<SimInterrupt>,
 
     /// The number of instructions successfully run since this `Simulator` was initialized.
     /// 
@@ -268,13 +248,42 @@ pub struct Simulator {
 
     /// Indicates whether the OS has been loaded.
     os_loaded: bool,
+
+    // ------------------ CONFIG/DEBUG STATE ------------------
+    // Calling [`Simulator::reset`] does not reset these values.
+
+    /// Machine control.
+    /// If unset, the program stops.
+    /// 
+    /// This is publicly accessible via a reference through [`Simulator::mcr`].
+    mcr: Arc<AtomicBool>,
+
+    /// Configuration settings for the simulator.
+    /// 
+    /// These are preserved between resets.
+    /// 
+    /// See [`SimFlags`] for more details on what configuration
+    /// settings are available.
+    pub flags: SimFlags,
+
+    /// Breakpoints for the simulator.
+    pub breakpoints: BreakpointList,
+
+    /// Functions that are run every step that can pause execution of the `Simulator`.
+    /// 
+    /// When an [`InterruptErr`] is raised, the simulation will raise [`SimErr::Interrupt`],
+    /// which can be used to handle the resulting `InterruptErr`.
+    external_interrupts: Vec<SimInterrupt>,
+
 }
 impl Simulator where Simulator: Send + Sync {}
 
 impl Simulator {
     /// Creates a new simulator with the provided initializers
     /// and with the OS loaded, but without a loaded object file.
-    pub fn new(flags: SimFlags) -> Self {
+    /// 
+    /// This also allows providing an MCR atomic which is used by the Simulator.
+    fn new_with_mcr(flags: SimFlags, mcr: Arc<AtomicBool>) -> Self {
         let mut filler = flags.word_create_strat.generator();
 
         let mut sim = Self {
@@ -284,19 +293,25 @@ impl Simulator {
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
             frame_stack: FrameStack::new(flags.debug_frames),
-            flags,
             alloca: Box::new([]),
-            mcr: Arc::default(),
-            breakpoints: Default::default(),
-            external_interrupts: vec![],
             instructions_run: 0,
             prefetch: false,
             hit_breakpoint: false,
             os_loaded: false,
+            mcr,
+            flags,
+            breakpoints: Default::default(),
+            external_interrupts: vec![],
         };
 
         sim.load_os();
         sim
+    }
+
+    /// Creates a new simulator with the provided initializers
+    /// and with the OS loaded, but without a loaded object file.
+    pub fn new(flags: SimFlags) -> Self {
+        Self::new_with_mcr(flags, Arc::default())
     }
 
     /// Loads and initializes the operating system.
@@ -332,17 +347,28 @@ impl Simulator {
     
     /// Resets the simulator.
     /// 
-    /// This sets the simulator back to the state it was in when [`Simulator::new`] was called.
-    /// Essentially, this resets all state fields back to their defaults,
-    /// and the memory and register file back to their original initialization values 
-    /// (unless the creation strategy used to initialize this [`Simulator`] was [`WordCreateStrategy::Unseeded`]).
+    /// This resets the state of the `Simulator` back to before any execution calls,
+    /// while preserving configuration and debug state.
+    /// 
+    /// Note that this function preserves:
+    /// - Flags
+    /// - Breakpoints
+    /// - External interrupts
+    /// - MCR reference (i.e., anything with access to the Simulator's MCR can still control it)
+    /// - IO (however, note that it does not reset IO state, which must be manually reset)
+    /// 
+    /// This also does not reload object files. Any object file data has to be reloaded into the Simulator.
     pub fn reset(&mut self) {
-        // FIXME: Do these need to be preserved:
-        // Breakpoints
-        // IO state
-
+        let mcr = Arc::clone(&self.mcr);
         let flags = self.flags;
-        *self = Simulator::new(flags);
+        let breakpoints = std::mem::take(&mut self.breakpoints);
+        let external_ints = std::mem::take(&mut self.external_interrupts);
+        let io = std::mem::take(&mut self.mem.io.inner);
+
+        *self = Simulator::new_with_mcr(flags, mcr);
+        self.breakpoints = breakpoints;
+        self.external_interrupts = external_ints;
+        self.mem.io.inner = io;
     }
     
     /// Sets and initializes the IO handler.
@@ -558,6 +584,11 @@ impl Simulator {
     /// to be handled properly.
     pub fn add_external_interrupt(&mut self, interrupt: impl Fn(&Self) -> Result<(), InterruptErr> + Send + Sync + 'static) {
         self.external_interrupts.push(SimInterrupt(Box::new(interrupt)))
+    }
+
+    /// Clears any external interrupts.
+    pub fn clear_external_interrupts(&mut self) {
+        self.external_interrupts.clear()
     }
 
     /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
