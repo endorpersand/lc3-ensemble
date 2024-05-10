@@ -4,8 +4,6 @@
 //! breakpoint field to cause the simulator to break.
 use std::fmt::Write;
 
-use slotmap::{new_key_type, Key, KeyData, SlotMap};
-
 use crate::ast::Reg;
 
 use super::Simulator;
@@ -240,27 +238,14 @@ mod test {
     }
 }
 
-new_key_type! {
-    /// Key to index into a breakpoint list.
-    pub struct BreakpointKey;
-}
-impl BreakpointKey {
-    /// Converts key into a value that can be passed through FFI.
-    pub fn as_ffi(self) -> u64 {
-        self.data().as_ffi()
-    }
-    /// Converts FFI value to key.
-    pub fn from_ffi(val: u64) -> Self {
-        Self::from(KeyData::from_ffi(val))
-    }
-}
 /// A list of breakpoints.
 /// 
 /// This works similarly to GDB breakpoints, in that creating a breakpoint
 /// gives you an ID which you can use to query or remove the breakpoint later.
 #[derive(Debug, Default)]
 pub struct BreakpointList {
-    inner: SlotMap<BreakpointKey, Breakpoint>
+    inner: std::collections::HashMap<u32, Breakpoint>,
+    counter: u32
 }
 
 impl BreakpointList {
@@ -269,19 +254,19 @@ impl BreakpointList {
         Default::default()
     }
     
-    /// Gets an immutable reference to breakpoint with a given key, 
+    /// Gets an immutable reference to breakpoint with a given ID,
     /// returning None if it was already removed.
-    pub fn get(&self, key: BreakpointKey) -> Option<&Breakpoint> {
-        self.inner.get(key)
+    pub fn get(&self, id: u32) -> Option<&Breakpoint> {
+        self.inner.get(&id)
     }
-    /// Gets a mutable reference to breakpoint with a given key, 
+    /// Gets a mutable reference to breakpoint with a given ID,
     /// returning None if it was already removed.
-    pub fn get_mut(&mut self, key: BreakpointKey) -> Option<&mut Breakpoint> {
-        self.inner.get_mut(key)
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut Breakpoint> {
+        self.inner.get_mut(&id)
     }
-    /// Checks if the key is currently associated with some breakpoint.
-    pub fn contains_key(&self, key: BreakpointKey) -> bool {
-        self.inner.contains_key(key)
+    /// Checks if the ID is currently associated with some breakpoint.
+    pub fn contains_key(&self, id: u32) -> bool {
+        self.inner.contains_key(&id)
     }
 
     /// Counts the number of defined breakpoints.
@@ -294,14 +279,27 @@ impl BreakpointList {
     }
 
     /// Inserts a breakpoint into the list and returns its key.
-    pub fn insert(&mut self, bpt: Breakpoint) -> BreakpointKey {
-        self.inner.insert(bpt)
-    }
-    /// Remove breakpoint with given key.
     /// 
-    /// If breakpoint was previously removed, then this returns None.
-    pub fn remove(&mut self, key: BreakpointKey) -> Option<Breakpoint> {
-        self.inner.remove(key)
+    /// This panics if another breakpoint is added while 2^32 breakpoints are currently active.
+    pub fn insert(&mut self, bpt: Breakpoint) -> u32 {
+        if self.inner.len() > (u32::MAX as usize) {
+            panic!("All slots are filled, no new breakpoints can be added to this list");
+        }
+
+        while self.inner.contains_key(&self.counter) {
+            self.counter = self.counter.wrapping_add(1);
+        }
+        let id = self.counter;
+        self.inner.insert(id, bpt);
+        self.counter = self.counter.wrapping_add(1);
+        
+        id
+    }
+    /// Remove breakpoint with a given ID.
+    /// 
+    /// If no breakpoint is present with this ID, this returns None.
+    pub fn remove(&mut self, key: u32) -> Option<Breakpoint> {
+        self.inner.remove(&key)
     }
 
     /// Remove breakpoint that matches a given value.
@@ -321,54 +319,49 @@ impl BreakpointList {
     /// If you'd like to remove by key, use [`BreakpointList::remove`].
     pub fn remove_breakpoint_by(&mut self, mut pred: impl FnMut(&mut Breakpoint) -> bool) -> Option<Breakpoint> {
         self.inner.iter_mut()
-            .find_map(|(k, b)| pred(b).then_some(k))
-            .and_then(|k| self.inner.remove(k))
+            .find_map(|(&k, b)| pred(b).then_some(k))
+            .and_then(|k| self.remove(k))
     }
     /// Removes all breakpoints from the list.
     pub fn clear(&mut self) {
         self.inner.clear()
     }
 
-        /// An iterator visiting all breakpoints and their associated keys in arbitrary order.
-    /// 
-    /// This function must iterate over all slots, empty or not. In the face of many deleted elements it can be inefficient.
-    pub fn iter(&self) -> slotmap::basic::Iter<BreakpointKey, Breakpoint> {
+    /// An iterator visiting all breakpoints and their associated IDs in arbitrary order.
+    pub fn iter(&self) -> impl Iterator<Item=(u32, &Breakpoint)> {
         self.inner.iter()
+            .map(|(&k, v)| (k, v))
     }
-    /// An iterator visiting all breakpoints and their associated keys in arbitrary order, with a mutable reference to each breakpoint.
-    /// 
-    /// This function must iterate over all slots, empty or not. In the face of many deleted elements it can be inefficient.
-    pub fn iter_mut(&mut self) -> slotmap::basic::IterMut<BreakpointKey, Breakpoint> {
+    /// An iterator visiting all breakpoints and their associated IDs in arbitrary order, with a mutable reference to each breakpoint.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item=(u32, &mut Breakpoint)> {
         self.inner.iter_mut()
+            .map(|(&k, v)| (k, v))
     }
-    /// An iterator visiting all keys in arbitrary order.
-    /// 
-    /// This function must iterate over all slots, empty or not. In the face of many deleted elements it can be inefficient.
-    pub fn keys(&self) -> slotmap::basic::Keys<BreakpointKey, Breakpoint> {
+    /// An iterator visiting all IDs in arbitrary order.
+    pub fn keys(&self) -> impl Iterator<Item=u32> + '_ {
         self.inner.keys()
+            .copied()
     }
     /// An iterator visiting all breakpoints in arbitrary order.
-    /// 
-    /// This function must iterate over all slots, empty or not. In the face of many deleted elements it can be inefficient.
-    pub fn values(&self) -> slotmap::basic::Values<BreakpointKey, Breakpoint> {
+    pub fn values(&self) -> std::collections::hash_map::Values<'_, u32, Breakpoint> {
         self.inner.values()
     }
     /// An iterator visiting all breakpoints in arbitrary order, with a mutable reference to each breakpoint.
-    /// 
-    /// This function must iterate over all slots, empty or not. In the face of many deleted elements it can be inefficient.
-    pub fn values_mut(&mut self) -> slotmap::basic::ValuesMut<BreakpointKey, Breakpoint> {
+    pub fn values_mut(&mut self) -> std::collections::hash_map::ValuesMut<'_, u32, Breakpoint> {
         self.inner.values_mut()
     }
 }
-impl std::ops::Index<BreakpointKey> for BreakpointList {
+impl std::ops::Index<u32> for BreakpointList {
     type Output = Breakpoint;
 
-    fn index(&self, index: BreakpointKey) -> &Self::Output {
-        &self.inner[index]
+    fn index(&self, index: u32) -> &Self::Output {
+        self.get(index)
+            .unwrap_or_else(|| panic!("no breakpoint with ID {index}"))
     }
 }
-impl std::ops::IndexMut<BreakpointKey> for BreakpointList {
-    fn index_mut(&mut self, index: BreakpointKey) -> &mut Self::Output {
-        &mut self.inner[index]
+impl std::ops::IndexMut<u32> for BreakpointList {
+    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
+        self.get_mut(index)
+            .unwrap_or_else(|| panic!("no breakpoint with ID {index}"))
     }
 }
