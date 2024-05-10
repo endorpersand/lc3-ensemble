@@ -180,12 +180,6 @@ impl PySimulator {
     fn reset(&mut self) {
         self.sim.reset();
 
-        let io = BufferedIO::with_bufs(Arc::clone(&self.input), Arc::clone(&self.output));
-        self.sim.open_io(io);
-        self.sim.add_external_interrupt(|_| {
-            Python::with_gil(|py| py.check_signals())
-                .map_err(InterruptErr::new)
-        });
         self.obj.take();
 
         self.input.write().unwrap_or_else(|e| e.into_inner()).clear();
@@ -214,6 +208,17 @@ impl PySimulator {
             input: Default::default(),
             output: Default::default()
         };
+
+        // Set IO:
+        let io = BufferedIO::with_bufs(Arc::clone(&this.input), Arc::clone(&this.output));
+        this.sim.open_io(io);
+
+        // Set check_signals interrupt:
+        // This allows the simulator to interrupt on a keyboard interrupt from the Python interface.
+        this.sim.add_external_interrupt(|_| {
+            Python::with_gil(|py| py.check_signals())
+                .map_err(InterruptErr::new)
+        });
 
         this.reset();
         this
