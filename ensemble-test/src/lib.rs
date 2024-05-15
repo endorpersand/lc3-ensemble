@@ -5,7 +5,7 @@ use lc3_ensemble::asm::{assemble_debug, ObjectFile};
 use lc3_ensemble::ast::reg_consts::{R0, R1, R2, R3, R4, R5, R6, R7};
 use lc3_ensemble::ast::Reg;
 use lc3_ensemble::parse::parse_ast;
-use lc3_ensemble::sim::debug::{Breakpoint, BreakpointKey};
+use lc3_ensemble::sim::debug::Breakpoint;
 use lc3_ensemble::sim::frame::{Frame, ParameterList};
 use lc3_ensemble::sim::io::BufferedIO;
 use lc3_ensemble::sim::mem::{MemAccessCtx, Word, WordCreateStrategy};
@@ -455,28 +455,25 @@ impl PySimulator {
     }
 
     /// Adds a breakpoint to the given location.
-    fn add_breakpoint(&mut self, break_loc: MemLocation) -> PyResult<u64> {
+    fn add_breakpoint(&mut self, break_loc: MemLocation) -> PyResult<u32> {
         let addr = self.resolve_location(break_loc)
             .map_err(|label| PyValueError::new_err(format!("cannot add a breakpoint at non-existent label {label:?}")))?;
             
 
-        Ok({
-            self.sim.breakpoints.insert(Breakpoint::PC(addr))
-                .as_ffi()
-        })
+        Ok(self.sim.breakpoints.insert(Breakpoint::PC(addr)))
     }
     /// Removes a breakpoint with the given ID.
     /// 
     /// This returns whether the removal was successful (i.e., whether there is a breakpoint at the given ID).
-    fn remove_breakpoint(&mut self, break_id: u64) -> bool {
-        self.sim.breakpoints.remove(BreakpointKey::from_ffi(break_id)).is_some()
+    fn remove_breakpoint(&mut self, break_id: u32) -> bool {
+        self.sim.breakpoints.remove(break_id).is_some()
     }
     
     /// Gets a list of currently defined breakpoints.
-    fn breakpoints(&self) -> std::collections::HashMap<u16, u64> {
+    fn breakpoints(&self) -> std::collections::HashMap<u16, u32> {
         self.sim.breakpoints.iter()
             .filter_map(|(k, bp)| match *bp {
-                Breakpoint::PC(addr) => Some((addr, k.as_ffi())),
+                Breakpoint::PC(addr) => Some((addr, k)),
                 _ => None
             })
             .collect()
