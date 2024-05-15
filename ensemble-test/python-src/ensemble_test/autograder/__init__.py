@@ -60,6 +60,28 @@ class LC3UnitTestCase(unittest.TestCase):
             f"actual:   {actual}"
         )
         
+    def _print_stack_frame(self):
+        stack = self.sim.frames
+        for i, frame in enumerate(stack):
+            name = self.sim.reverse_lookup(frame.callee_addr) or f"x{frame.callee_addr:04X}"
+            defn = self.sim.get_subroutine_def(frame.callee_addr)
+            fp = frame.frame_ptr and frame.frame_ptr[0]
+            r7 = self.sim.get_mem(fp + 2) if fp is not None else None
+
+            fp_str = f"x{fp:04X}" if fp is not None else "?"
+            r7_str = f"x{r7:04X}" if r7 is not None else "?"
+
+            if defn is not None:
+                if defn[0] == core.SubroutineType.CallingConvention:
+                    args = ', '.join(f"{p}={a}" for p, (a, _) in zip(defn[1], frame.arguments))
+                elif defn[0] == core.SubroutineType.PassByRegister:
+                    args = ', '.join(f"{p}={a}" for (p, _), (a, _) in zip(defn[1], frame.arguments))
+                else:
+                    raise NotImplementedError(f"_print_stack_frame: unimplemented subroutine type {defn[0]}")
+            else:
+                args = "?"
+            print(f"{' ' * (i * 2)}{name}({args}): fp={fp_str}, r7={r7_str}")
+
     def _assertShortEqual(self, expected: int, actual: int, msg_fmt: str | None = None, *, signed: bool = True, show_hex: bool = True):
         expected_i, expected_u = _to_i16(expected), _to_u16(expected)
         actual_i, actual_u = _to_i16(actual), _to_u16(actual)
@@ -284,3 +306,9 @@ class LC3UnitTestCase(unittest.TestCase):
 
         # TODO: better interface than list[CallNode]
         return path
+    
+    def assertCallsCorrect(self): pass
+    def assertRegsPreserved(self): pass
+    def assertStackCorrect(self): pass
+    def assertHalted(self): pass
+    def assertReturned(self): pass

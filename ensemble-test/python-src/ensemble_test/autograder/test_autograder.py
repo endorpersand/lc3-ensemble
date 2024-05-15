@@ -266,6 +266,18 @@ class TestLC3Sample(LC3UnitTestCase):
             self.assertReg(6, 0xD000)
             self.assertReg(0, 4 * N)
 
+    def test_stack_frame(self):
+        self.loadFile("test-asm/xy-lc3cc.asm")
+
+        self.defineSubroutine("X", ["n"])
+        self.defineSubroutine("Y", ["n"])
+        try:
+            self.runCode()
+        except core.SimError as e:
+            print(e)
+            self._print_stack_frame()
+            self.assertTrue(False)
+        self.assertReg(0, 2)
 
 if __name__ == "__main__":
     unittest.main()
