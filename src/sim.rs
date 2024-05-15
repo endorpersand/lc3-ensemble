@@ -41,6 +41,8 @@ pub enum SimErr {
     AccessViolation,
     /// Not an error, but HALT!
     ProgramHalted,
+    /// Interrupt raised.
+    Interrupt(InterruptErr),
     /// A register was loaded with a partially uninitialized value.
     /// 
     /// This will ignore loads from the stack (R6), because it is convention to push registers 
@@ -83,6 +85,7 @@ impl std::fmt::Display for SimErr {
             SimErr::PrivilegeViolation  => f.write_str("privilege violation"),
             SimErr::AccessViolation     => f.write_str("access violation"),
             SimErr::ProgramHalted       => f.write_str("program halted"),
+            SimErr::Interrupt(e)        => write!(f, "unhandled interrupt: {e}"),
             SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
             SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
             SimErr::StrictIOSetUninit   => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
@@ -96,6 +99,60 @@ impl std::fmt::Display for SimErr {
     }
 }
 impl std::error::Error for SimErr {}
+
+/// An interrupt occurred.
+/// 
+/// See [`Simulator::add_external_interrupt`].
+#[derive(Debug)]
+pub struct InterruptErr(Box<dyn std::error::Error + Send + Sync + 'static>);
+impl InterruptErr {
+    /// Creates a new [`InterruptErr`].
+    pub fn new(e: impl std::error::Error + Send + Sync + 'static) -> Self {
+        InterruptErr(Box::new(e))
+    }
+
+    /// Get the internal error from this interrupt.
+    /// 
+    /// This can be downcast by the typical methods on `dyn Error`.
+    pub fn into_inner(self) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+        self.0
+    }
+}
+impl std::fmt::Display for InterruptErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for InterruptErr {}
+impl From<InterruptErr> for SimErr {
+    fn from(value: InterruptErr) -> Self {
+        SimErr::Interrupt(value)
+    }
+}
+
+#[allow(clippy::type_complexity)]
+struct SimInterrupt(Box<dyn Fn(&Simulator) -> Result<(), InterruptErr> + Send + Sync + 'static>);
+impl std::fmt::Debug for SimInterrupt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimInterrupt").finish_non_exhaustive()
+    }
+}
+
+/// Reason for why execution paused if it wasn't due to an error.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+enum PauseCondition {
+    /// Program reached a halt.
+    Halt,
+    /// Program set MCR to off.
+    MCROff,
+    /// Program hit a breakpoint.
+    Breakpoint,
+    /// Program hit a tripwire condition.
+    Tripwire,
+    /// Program hit an error and did not pause successfully.
+    #[default]
+    Unsuccessful
+}
 
 /// Configuration flags for [`Simulator`].
 /// 
@@ -154,6 +211,9 @@ impl Default for SimFlags {
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
+    // ------------------ SIMULATION STATE ------------------
+    // Calling [`Simulator::reset`] resets these values.
+
     /// The simulator's memory.
     /// 
     /// Note that this is held in the heap, as it is too large for the stack.
@@ -174,20 +234,6 @@ pub struct Simulator {
     /// The frame stack.
     pub frame_stack: FrameStack,
 
-    /// Configuration settings for the simulator.
-    /// 
-    /// These are preserved between resets.
-    /// 
-    /// See [`SimFlags`] for more details on what configuration
-    /// settings are available.
-    pub flags: SimFlags,
-
-    /// Machine control.
-    /// If unset, the program stops.
-    /// 
-    /// This is publicly accessible via a reference through [`Simulator::mcr`].
-    mcr: Arc<AtomicBool>,
-
     /// Allocated blocks in object file.
     /// 
     /// This field keeps track of "allocated" blocks 
@@ -202,10 +248,6 @@ pub struct Simulator {
     /// into instructions but oops.
     alloca: Box<[(u16, u16)]>,
 
-
-    /// Breakpoints for the simulator.
-    pub breakpoints: BreakpointList,
-
     /// The number of instructions successfully run since this `Simulator` was initialized.
     /// 
     /// This can be set to 0 to reset the counter.
@@ -217,18 +259,48 @@ pub struct Simulator {
     /// the PC of the instruction that caused an error. See [`Simulator::prefetch_pc`].
     prefetch: bool,
 
-    /// Indicates whether the last execution hit a breakpoint.
-    hit_breakpoint: bool,
+    /// Indicates the reason why the last execution (via [`Simulator::run_while`] and adjacent)
+    /// had paused.
+    pause_condition: PauseCondition,
 
     /// Indicates whether the OS has been loaded.
     os_loaded: bool,
+
+    // ------------------ CONFIG/DEBUG STATE ------------------
+    // Calling [`Simulator::reset`] does not reset these values.
+
+    /// Machine control.
+    /// If unset, the program stops.
+    /// 
+    /// This is publicly accessible via a reference through [`Simulator::mcr`].
+    mcr: Arc<AtomicBool>,
+
+    /// Configuration settings for the simulator.
+    /// 
+    /// These are preserved between resets.
+    /// 
+    /// See [`SimFlags`] for more details on what configuration
+    /// settings are available.
+    pub flags: SimFlags,
+
+    /// Breakpoints for the simulator.
+    pub breakpoints: BreakpointList,
+
+    /// Functions that are run every step that can pause execution of the `Simulator`.
+    /// 
+    /// When an [`InterruptErr`] is raised, the simulation will raise [`SimErr::Interrupt`],
+    /// which can be used to handle the resulting `InterruptErr`.
+    external_interrupts: Vec<SimInterrupt>,
+
 }
 impl Simulator where Simulator: Send + Sync {}
 
 impl Simulator {
     /// Creates a new simulator with the provided initializers
     /// and with the OS loaded, but without a loaded object file.
-    pub fn new(flags: SimFlags) -> Self {
+    /// 
+    /// This also allows providing an MCR atomic which is used by the Simulator.
+    fn new_with_mcr(flags: SimFlags, mcr: Arc<AtomicBool>) -> Self {
         let mut filler = flags.word_create_strat.generator();
 
         let mut sim = Self {
@@ -238,18 +310,25 @@ impl Simulator {
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
             frame_stack: FrameStack::new(flags.debug_frames),
-            flags,
             alloca: Box::new([]),
-            mcr: Arc::default(),
-            breakpoints: Default::default(),
             instructions_run: 0,
             prefetch: false,
-            hit_breakpoint: false,
+            pause_condition: Default::default(),
             os_loaded: false,
+            mcr,
+            flags,
+            breakpoints: Default::default(),
+            external_interrupts: vec![],
         };
 
         sim.load_os();
         sim
+    }
+
+    /// Creates a new simulator with the provided initializers
+    /// and with the OS loaded, but without a loaded object file.
+    pub fn new(flags: SimFlags) -> Self {
+        Self::new_with_mcr(flags, Arc::default())
     }
 
     /// Loads and initializes the operating system.
@@ -285,17 +364,28 @@ impl Simulator {
     
     /// Resets the simulator.
     /// 
-    /// This sets the simulator back to the state it was in when [`Simulator::new`] was called.
-    /// Essentially, this resets all state fields back to their defaults,
-    /// and the memory and register file back to their original initialization values 
-    /// (unless the creation strategy used to initialize this [`Simulator`] was [`WordCreateStrategy::Unseeded`]).
+    /// This resets the state of the `Simulator` back to before any execution calls,
+    /// while preserving configuration and debug state.
+    /// 
+    /// Note that this function preserves:
+    /// - Flags
+    /// - Breakpoints
+    /// - External interrupts
+    /// - MCR reference (i.e., anything with access to the Simulator's MCR can still control it)
+    /// - IO (however, note that it does not reset IO state, which must be manually reset)
+    /// 
+    /// This also does not reload object files. Any object file data has to be reloaded into the Simulator.
     pub fn reset(&mut self) {
-        // FIXME: Do these need to be preserved:
-        // Breakpoints
-        // IO state
-
+        let mcr = Arc::clone(&self.mcr);
         let flags = self.flags;
-        *self = Simulator::new(flags);
+        let breakpoints = std::mem::take(&mut self.breakpoints);
+        let external_ints = std::mem::take(&mut self.external_interrupts);
+        let io = std::mem::take(&mut self.mem.io.inner);
+
+        *self = Simulator::new_with_mcr(flags, mcr);
+        self.breakpoints = breakpoints;
+        self.external_interrupts = external_ints;
+        self.mem.io.inner = io;
     }
     
     /// Sets and initializes the IO handler.
@@ -415,7 +505,16 @@ impl Simulator {
 
     /// Indicates whether the last execution of the simulator hit a breakpoint.
     pub fn hit_breakpoint(&self) -> bool {
-        self.hit_breakpoint
+        matches!(self.pause_condition, PauseCondition::Breakpoint)
+    }
+
+    /// Indicates whether the last execution of the simulator resulted in a HALT successfully occurring.
+    /// 
+    /// This is defined as:
+    /// - `HALT` being executed while virtual HALTs are enabled
+    /// - `MCR` being set to `x0000` during the execution of the program.
+    pub fn hit_halt(&self) -> bool {
+        matches!(self.pause_condition, PauseCondition::Halt | PauseCondition::MCROff)
     }
 
     /// Computes the default memory access context, 
@@ -496,6 +595,28 @@ impl Simulator {
         self.call_interrupt(vect, ft)
     }
 
+    /// Registers an "external interrupt" to the simulator which is run every step.
+    /// 
+    /// An "external interrupt" is a function that can pause execution of the `Simulator`,
+    /// which is not necessarily handled by the Simulator's OS.
+    /// 
+    /// When an [`InterruptErr`] is raised by an external interrupt, the simulation will raise [`SimErr::Interrupt`],
+    /// which can be used to handle the resulting `InterruptErr`.
+    /// 
+    /// One example where this is used is in Python bindings. 
+    /// In that case, we want to be able to halt the Simulator on a `KeyboardInterrupt`.
+    /// However, by default, Python cannot signal to the Rust library that a `KeyboardInterrupt`
+    /// has occurred. Thus, we can add a signal handler as an external interrupt to allow the `KeyboardInterrupt`
+    /// to be handled properly.
+    pub fn add_external_interrupt(&mut self, interrupt: impl Fn(&Self) -> Result<(), InterruptErr> + Send + Sync + 'static) {
+        self.external_interrupts.push(SimInterrupt(Box::new(interrupt)))
+    }
+
+    /// Clears any external interrupts.
+    pub fn clear_external_interrupts(&mut self) {
+        self.external_interrupts.clear()
+    }
+
     /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
     /// 
     /// The typical break conditions are:
@@ -505,7 +626,7 @@ impl Simulator {
     pub fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
-        self.hit_breakpoint = false;
+        std::mem::take(&mut self.pause_condition);
         self.mcr.store(true, Ordering::Relaxed);
 
         // event loop
@@ -513,26 +634,32 @@ impl Simulator {
         // 1. the MCR is set to false
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
-        let result = 'outer: {
-            while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-                match self.step() {
-                    Ok(_) => {},
-                    Err(SimErr::ProgramHalted) => break,
-                    Err(e) => break 'outer Err(e)
-                }
-    
-                // After executing, check that any breakpoints were hit.
-                if self.breakpoints.values().any(|bp| bp.check(self)) {
-                    self.hit_breakpoint = true;
-                    break;
-                }
+        let result = loop {
+            // MCR turned off:
+            if !self.mcr.load(Ordering::Relaxed) {
+                break Ok(PauseCondition::MCROff);
+            }
+            // Tripwire turned off:
+            if !tripwire(self) {
+                break Ok(PauseCondition::Tripwire);
+            }
+            
+            // Run a step:
+            match self.step() {
+                Ok(_) => {},
+                Err(SimErr::ProgramHalted) => break Ok(PauseCondition::Halt),
+                Err(e) => break Err(e)
             }
 
-            Ok(())
+            // After executing, check that any breakpoints were hit.
+            if self.breakpoints.values().any(|bp| bp.check(self)) {
+                break Ok(PauseCondition::Breakpoint);
+            }
         };
     
         self.mcr.store(false, Ordering::Release);
-        result
+        self.pause_condition = result?;
+        Ok(())
     }
 
     /// Execute the program.
@@ -554,6 +681,12 @@ impl Simulator {
     /// whereas `step_in` will ignore `ProgramHalted` errors.
     fn step(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
+
+        // Call all external interrupts:
+        for ei in &self.external_interrupts {
+            (ei.0)(self)?;
+        }
+
         let word = self.mem.read(self.pc, self.default_mem_ctx())?
             .get_if_init(self.flags.strict, SimErr::StrictPCCurrUninit)?;
         let instr = SimInstr::decode(word)?;

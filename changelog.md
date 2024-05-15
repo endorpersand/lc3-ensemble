@@ -1,3 +1,12 @@
+# 0.4.2 (May 15, 2024)
+
+- Replace `slotmap` implementation of BreakpointList with an incremental one
+- Add `Simulator::hit_halt`
+- Revise SymbolTable's Debug implementation (does not affect its Debug output)
+- External interrupts
+  - Useful for stopping execution of the program when needed by an external handle around the Simulator (e.g., by a Python binding)
+  - Interrupts that are triggered are raised as `SimErr::Interrupt`, which holds an opaque Error type which can be downcast and handled properly.
+
 # 0.4.1 (May 8, 2024)
 
 - Fix bug from 0.4.0 where the frame pointer wasn't being computed correctly when tracking a subroutine under standard calling convention

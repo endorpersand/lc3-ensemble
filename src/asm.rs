@@ -262,7 +262,13 @@ impl LineSymbolMap {
             })
     }
 }
-
+impl std::fmt::Debug for LineSymbolMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+        .entries(self.iter().map(|(i, v)| (i, Addr(v))))
+        .finish()
+    }
+}
 /// Struct holding the source string and contains helpers 
 /// to index lines and to query position information from a source string.
 pub struct SourceInfo {
@@ -533,39 +539,26 @@ impl SymbolTable {
 }
 impl std::fmt::Debug for SymbolTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use std::cell::Cell;
-
-        #[repr(transparent)]
-        struct Addr(u16);
-        impl std::fmt::Debug for Addr {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "x{:04X}", self.0)
-            }
-        }
-
-        struct Map<M>(Cell<Option<M>>);
-        impl<M> Map<M> {
-            fn new(m: M) -> Self {
-                Map(Cell::new(Some(m)))
-            }
-        }
-        impl<K: std::fmt::Debug, V: std::fmt::Debug, M: IntoIterator<Item=(K, V)>> std::fmt::Debug for Map<M> {
+        struct ClosureMap<R, F: Fn() -> R>(F);
+        impl<K, V, R, F> std::fmt::Debug for ClosureMap<R, F> 
+            where K: std::fmt::Debug,
+                  V: std::fmt::Debug,
+                  R: IntoIterator<Item=(K, V)>,
+                  F: Fn() -> R
+        {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.debug_map()
-                    .entries(self.0.take().unwrap())
+                    .entries((self.0)())
                     .finish()
             }
         }
 
         f.debug_struct("SymbolTable")
-            .field("label_map", &Map::new({
+            .field("label_map", &ClosureMap(|| {
                 self.label_map.iter()
                     .map(|(k, &(addr, start))| (k, (Addr(addr), start..(start + k.len()))))
             }))
-            .field("line_map", &Map::new({
-                self.line_map.iter()
-                    .map(|(i, v)| (i, Addr(v)))
-            }))
+            .field("line_map", &self.line_map)
             .field("source_info", &self.src_info)
             .finish()
     }
@@ -760,5 +753,14 @@ impl ObjectFile {
 impl Default for ObjectFile {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Used for [`std::fmt::Debug`] purposes.
+#[repr(transparent)]
+struct Addr(u16);
+impl std::fmt::Debug for Addr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "x{:04X}", self.0)
     }
 }
