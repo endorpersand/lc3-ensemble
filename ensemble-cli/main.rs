@@ -166,6 +166,7 @@ impl lc3_ensemble::err::Error for ReportSimErr {
             SimErr::PrivilegeViolation  => Some("RTI can only be called in supervisor mode".into()),
             SimErr::AccessViolation     => None,
             SimErr::ProgramHalted       => Some("you should not see this error. uh oh.".into()),
+            SimErr::Interrupt(_)        => None,
             SimErr::StrictRegSetUninit  => None,
             SimErr::StrictMemSetUninit  => None,
             SimErr::StrictIOSetUninit   => None,
