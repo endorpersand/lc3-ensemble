@@ -787,7 +787,7 @@ impl Simulator {
                         .get_if_init(self.flags.strict, SimErr::StrictPSRSetUninit)?;
                     self.reg_file[R6] += 2u16;
 
-                    self.pc = pc;
+                    self.set_pc(Word::new_init(pc), true)?;
                     self.psr = PSR(psr);
 
                     if !self.psr.privileged() {
@@ -829,12 +829,14 @@ impl Simulator {
                 self.mem.write(ea, val, write_ctx)?;
             },
             SimInstr::JMP(br) => {
-                // check for RET
+                let addr = self.reg_file[br];
+                self.set_pc(addr, true)?;
+                
+                // if this is RET,
+                // we must also handle frame information:
                 if br.reg_no() == 7 {
                     self.frame_stack.pop_frame();
                 }
-                let addr = self.reg_file[br];
-                self.set_pc(addr, true)?;
             },
             SimInstr::LEA(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
