@@ -165,6 +165,16 @@ impl PyFrame {
             .map(|w| (w.get(), w.is_init()))
             .collect()
     }
+    fn __repr__(&self) -> String {
+        format!(
+            "Frame {{ caller_addr: {caller_addr}, callee_addr: {callee_addr}, frame_type: {frame_type}, frame_ptr: {frame_ptr:?}, arguments: {arguments:?} }}",
+            caller_addr = self.get_caller_addr(),
+            callee_addr = self.get_callee_addr(),
+            frame_type = self.get_frame_type(),
+            frame_ptr = self.get_frame_ptr(),
+            arguments = self.get_arguments(),
+        )
+    }
 }
 
 /// The simulator!
