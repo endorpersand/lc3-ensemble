@@ -40,6 +40,7 @@ class LC3UnitTestCase(unittest.TestCase):
     def setUp(self):
         self.sim = core.Simulator()
         self.seed = self.sim.init(core.MemoryFillType.Random)
+        self.saved_registers: list[int] | None = None
         self.longMessage = False
     
     def _readContiguous(self, start_addr: int, length: int | None = None):
@@ -82,6 +83,9 @@ class LC3UnitTestCase(unittest.TestCase):
                 args = "?"
             print(f"{' ' * (i * 2)}{name}({args}): fp={fp_str}, r7={r7_str}")
 
+    def _saveRegisters(self):
+        self.saved_registers = [self.sim.get_reg(i) for i in range(8)]
+
     def _assertShortEqual(self, expected: int, actual: int, msg_fmt: str | None = None, *, signed: bool = True, show_hex: bool = True):
         expected_i, expected_u = _to_i16(expected), _to_u16(expected)
         actual_i, actual_u = _to_i16(actual), _to_u16(actual)
@@ -100,6 +104,7 @@ class LC3UnitTestCase(unittest.TestCase):
         self.sim.load_code(src)
 
     def runCode(self, max_instrs_run=INSTRUCTION_RUN_LIMIT):
+        self._saveRegisters()
         self.sim.run(max_instrs_run)
 
     def writeMemValue(self, label: str, value: int):
@@ -285,6 +290,7 @@ class LC3UnitTestCase(unittest.TestCase):
             raise NotImplementedError(f"callSubroutine: unimplemented subroutine type {defn[0]}")
         
         self.sim.pc = R7
+        self._saveRegisters()
         self.sim.call_subroutine(addr)
         
         path: list[CallNode] = [CallNode(frame_no=self.sim.frame_number, callee=addr, args=list(args))]
@@ -311,10 +317,26 @@ class LC3UnitTestCase(unittest.TestCase):
         return path
     
     def assertCallsCorrect(self): pass
-    def assertRegsPreserved(self): pass
+    def assertRegsPreserved(self, regs: list[int] | None = None):
+        if regs is None:
+            regs = [0, 1, 2, 3, 4, 5, 7]
+        elif not all(0 <= r < 8 for r in regs):
+                raise ValueError("regs argument has to consist of register numbers (which are between 0 and 7 inclusive)")
+    
+        if self.saved_registers is None:
+            raise ValueError("cannot call assertRegsPreserved before an execution method (e.g., runCode or callSubroutine)")
+        
+        for r in regs:
+            self._assertShortEqual(
+                self.saved_registers[r],
+                self.sim.get_reg(r),
+                f"Expected registers to be preserved: register {r} was expected to be {{expected}}, but was {{actual}}"
+            )
     def assertStackCorrect(self): pass
+        
     def assertHalted(self):
         if not self.sim.hit_halt():
             self.fail("Program did not halt correctly")
+    
     def assertReturned(self):
         self.assertPC(self.sim.r7)

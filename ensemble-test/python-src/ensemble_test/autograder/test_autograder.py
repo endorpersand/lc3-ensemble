@@ -294,5 +294,20 @@ class TestLC3Sample(LC3UnitTestCase):
         self.runCode()
         self.assertHalted()
 
+    def test_regs_preserved(self):
+        self.loadCode("""
+            .orig x3000
+            JSR SR
+            HALT
+
+            SR
+                ADD R0, R0, #2
+                RET
+            .end
+        """)
+
+        self.runCode()
+        self.assertRegsPreserved([0, 1, 2, 3, 4, 5])
+
 if __name__ == "__main__":
     unittest.main()
