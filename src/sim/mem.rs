@@ -466,7 +466,7 @@ impl Mem {
     }
 
     /// Copies an object file block into this memory.
-    pub fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
+    pub(super) fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
         let mem = &mut self.data;
 
         // chunk_by was added in Rust 1.77

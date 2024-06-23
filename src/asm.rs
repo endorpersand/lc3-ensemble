@@ -85,7 +85,7 @@ pub fn assemble_debug(ast: Vec<Stmt>, src: &str) -> Result<ObjectFile, AsmErr> {
 }
 
 fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<ObjectFile, AsmErr> {
-    let mut obj = ObjectFile::new();
+    let mut block_map: BTreeMap<u16, ObjBlock> = BTreeMap::new();
 
     // PASS 2
     // Holding both the LC and currently writing block
@@ -101,12 +101,29 @@ fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<Obje
                 current.replace((addr + 1, ObjBlock { start: addr, orig_span: stmt.span, words: vec![] }));
             },
             StmtKind::Directive(Directive::End) => {
-                // The current block is complete, so take it out and push it into the object file.
-                let Some((_, ObjBlock { start, orig_span: start_span, words })) = current.take() else {
+                // The current block is complete, so take it out and append it to the block map.
+                let Some((_, block)) = current.take() else {
                     // unreachable (because pass 1 should've found it)
                     return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span));
                 };
-                obj.push(start, start_span, words)?;
+
+                // only append if it's not empty:
+                if block.words.is_empty() { continue; }
+
+                // Look at previous block, check if there's any overlap between this block and the current one.
+                let prev_entry = block_map.range(..=block.start)
+                    .next_back()
+                    .or_else(|| block_map.last_key_value());
+                if let Some((_, prev_block)) = prev_entry {
+                    // check if this block overlaps with the previous block
+                    if (block.start.wrapping_sub(prev_block.start) as usize) < prev_block.words.len() {
+                        return Err(
+                            AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_block.orig_span.clone(), block.orig_span.clone()])
+                        );
+                    }
+                }
+
+                block_map.insert(block.start, block);
             },
             StmtKind::Directive(directive) => {
                 let Some((lc, block)) = &mut current else {
@@ -128,10 +145,13 @@ fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<Obje
         }
     }
 
-    if debug {
-        obj.set_symbol_table(sym);
-    }
-    Ok(obj)
+    let block_map = block_map.into_iter()
+        .map(|(start, ObjBlock { words, .. })| (start, words))
+        .collect();
+    Ok(ObjectFile {
+        block_map,
+        sym: debug.then_some(sym),
+    })
 }
 
 /// Kinds of errors that can occur from assembling given assembly code.
@@ -919,76 +939,25 @@ impl Extend<u16> for ObjBlock {
 /// This can be loaded in the simulator to run the assembled code.
 #[derive(Debug)]
 pub struct ObjectFile {
-    /// A mapping of each block's address to its corresponding data and 
-    /// the span of the .orig statement that starts the block.
+    /// A mapping of each block's address to its corresponding data.
     /// 
     /// Note that the length of a block should fit in a `u16`, so the
     /// block can be a maximum of 65535 words.
-    block_map: BTreeMap<u16, (Vec<Option<u16>>, Span)>,
+    block_map: BTreeMap<u16, Vec<Option<u16>>>,
 
     /// Debug symbols.
     sym: Option<SymbolTable>
 }
 impl ObjectFile {
-    /// Creates a new, empty [`ObjectFile`].
-    pub fn new() -> Self {
-        ObjectFile {
-            block_map: BTreeMap::new(),
-            sym: None
-        }
-    }
-
-    /// Add a new block to the object file, writing the provided words (`words`) at the provided address (`start`).
-    /// 
-    /// This will error if this block overlaps with another block already present in the object file.
-    pub fn push(&mut self, start: u16, start_span: Range<usize>, words: Vec<Option<u16>>) -> Result<(), AsmErr> {
-        // Only add to object file if non-empty:
-        if !words.is_empty() {
-            // Find previous block and ensure no overlap:
-            let prev_block = self.block_map.range(..=start).next_back()
-                .or_else(|| self.block_map.last_key_value());
-
-            if let Some((&prev_start, (prev_words, prev_span))) = prev_block {
-                // check if this block overlaps with the previous block
-                if (start.wrapping_sub(prev_start) as usize) < prev_words.len() {
-                    return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_span.clone(), start_span]));
-                }
-            }
-
-            // No overlap, so we can add it:
-            self.block_map.insert(start, (words, start_span));
-        }
-
-        Ok(())
-    }
-
     /// Get an iterator over all of the blocks of the object file.
-    pub fn iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
         self.block_map.iter()
-            .map(|(&addr, (block, _))| (addr, block.as_slice()))
+            .map(|(&addr, block)| (addr, block.as_slice()))
     }
-
-    /// Counts the number of blocks in this object file.
-    pub fn len(&self) -> usize {
-        self.block_map.len()
-    }
-    /// Returns whether there are blocks in this object file.
-    pub fn is_empty(&self) -> bool {
-        self.block_map.is_empty()
-    }
-
-    fn set_symbol_table(&mut self, sym: SymbolTable) {
-        self.sym.replace(sym);
-    }
+    
     /// Gets the symbol table if it is present in the object file.
     pub fn symbol_table(&self) -> Option<&SymbolTable> {
         self.sym.as_ref()
-    }
-}
-
-impl Default for ObjectFile {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

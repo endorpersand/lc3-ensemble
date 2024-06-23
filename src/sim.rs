@@ -300,8 +300,6 @@ pub enum SimErr {
     PrivilegeViolation,
     /// A supervisor region was accessed in user mode.
     AccessViolation,
-    /// Not an error, but HALT!
-    ProgramHalted,
     /// Interrupt raised.
     Interrupt(InterruptErr),
     /// A register was loaded with a partially uninitialized value.
@@ -345,7 +343,6 @@ impl std::fmt::Display for SimErr {
             SimErr::InvalidInstrFormat  => f.write_str("simulator executed invalid instruction"),
             SimErr::PrivilegeViolation  => f.write_str("privilege violation"),
             SimErr::AccessViolation     => f.write_str("access violation"),
-            SimErr::ProgramHalted       => f.write_str("program halted"),
             SimErr::Interrupt(e)        => write!(f, "unhandled interrupt: {e}"),
             SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
             SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
@@ -361,6 +358,19 @@ impl std::fmt::Display for SimErr {
 }
 impl std::error::Error for SimErr {}
 
+/// Anything that can cause a step to abruptly fail to finish.
+enum StepBreak {
+    /// A virtual halt was executed.
+    Halt,
+    /// A simulation error occurred.
+    Err(SimErr),
+}
+impl From<SimErr> for StepBreak {
+    fn from(value: SimErr) -> Self {
+        Self::Err(value)
+    }
+}
+
 /// An interrupt occurred.
 /// 
 /// See [`Simulator::add_external_interrupt`].
@@ -368,7 +378,7 @@ impl std::error::Error for SimErr {}
 pub struct InterruptErr(Box<dyn std::error::Error + Send + Sync + 'static>);
 impl InterruptErr {
     /// Creates a new [`InterruptErr`].
-    pub fn new(e: impl std::error::Error + Send + Sync + 'static) -> Self {
+    fn new(e: impl std::error::Error + Send + Sync + 'static) -> Self {
         InterruptErr(Box::new(e))
     }
 
@@ -388,6 +398,11 @@ impl std::error::Error for InterruptErr {}
 impl From<InterruptErr> for SimErr {
     fn from(value: InterruptErr) -> Self {
         SimErr::Interrupt(value)
+    }
+}
+impl From<InterruptErr> for StepBreak {
+    fn from(value: InterruptErr) -> Self {
+        StepBreak::Err(value.into())
     }
 }
 
@@ -602,7 +617,7 @@ impl Simulator {
     /// is assured to function without IO is `HALT`.
     /// 
     /// To initialize the IO, use [`Simulator::open_io`].
-    pub fn load_os(&mut self) {
+    fn load_os(&mut self) {
         use crate::parse::parse_ast;
         use crate::asm::assemble;
         use std::sync::OnceLock;
@@ -663,7 +678,7 @@ impl Simulator {
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         use std::cmp::Ordering;
 
-        let mut alloca = Vec::with_capacity(obj.len());
+        let mut alloca = vec![];
 
         for (start, words) in obj.iter() {
             self.mem.copy_obj_block(start, words);
@@ -719,7 +734,7 @@ impl Simulator {
     /// 
     /// This should be true when this function is used for instructions like `BR` and `JSR` 
     /// and should be false when this function is used to increment PC during fetch.
-    pub fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
+    fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
         let addr = addr_word.get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
         if self.flags.strict && st_check_mem {
             // Check next memory value is initialized:
@@ -733,7 +748,7 @@ impl Simulator {
     /// Adds an offset to the PC.
     /// 
     /// See [`Simulator::set_pc`] for details about `st_check_mem`.
-    pub fn offset_pc(&mut self, offset: i16, st_check_mem: bool) -> Result<(), SimErr> {
+    fn offset_pc(&mut self, offset: i16, st_check_mem: bool) -> Result<(), SimErr> {
         self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)), st_check_mem)
     }
     /// Gets the value of the prefetch PC.
@@ -813,13 +828,13 @@ impl Simulator {
     /// 
     /// The address provided is the address into the jump table (either the trap or interrupt vector ones).
     /// This function will always jump to `mem[vect]` at the end of this function.
-    fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
+    fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), StepBreak> {
         if priority.is_some_and(|prio| prio <= self.psr.priority()) { return Ok(()) };
         
         // Virtual HALT
         if !self.flags.use_real_halt && vect == 0x25 {
             self.offset_pc(-1, false)?; // decrement PC so that execution goes back here
-            return Err(SimErr::ProgramHalted)
+            return Err(StepBreak::Halt)
         };
         
         if !self.psr.privileged() {
@@ -850,7 +865,9 @@ impl Simulator {
             true => FrameType::Interrupt,
             false => FrameType::Trap,
         };
+        
         self.call_interrupt(vect, ft)
+            .map_err(Into::into)
     }
 
     /// Registers an "external interrupt" to the simulator which is run every step.
@@ -858,7 +875,7 @@ impl Simulator {
     /// An "external interrupt" is a function that can pause execution of the `Simulator`,
     /// which is not necessarily handled by the Simulator's OS.
     /// 
-    /// When an [`InterruptErr`] is raised by an external interrupt, the simulation will raise [`SimErr::Interrupt`],
+    /// When an error is raised by an external interrupt, the simulation will raise [`SimErr::Interrupt`],
     /// which can be used to handle the resulting `InterruptErr`.
     /// 
     /// One example where this is used is in Python bindings. 
@@ -866,8 +883,13 @@ impl Simulator {
     /// However, by default, Python cannot signal to the Rust library that a `KeyboardInterrupt`
     /// has occurred. Thus, we can add a signal handler as an external interrupt to allow the `KeyboardInterrupt`
     /// to be handled properly.
-    pub fn add_external_interrupt(&mut self, interrupt: impl Fn(&Self) -> Result<(), InterruptErr> + Send + Sync + 'static) {
-        self.external_interrupts.push(SimInterrupt(Box::new(interrupt)))
+    pub fn add_external_interrupt<E, F>(&mut self, interrupt: F) 
+        where E: std::error::Error + Send + Sync + 'static,
+              F: Fn(&Self) -> Result<(), E> + Send + Sync + 'static
+    {
+        self.external_interrupts.push(SimInterrupt(Box::new({
+            move |this| interrupt(this).map_err(InterruptErr::new)
+        })))
     }
 
     /// Clears any external interrupts.
@@ -905,8 +927,8 @@ impl Simulator {
             // Run a step:
             match self.step() {
                 Ok(_) => {},
-                Err(SimErr::ProgramHalted) => break Ok(PauseCondition::Halt),
-                Err(e) => break Err(e)
+                Err(StepBreak::Halt) => break Ok(PauseCondition::Halt),
+                Err(StepBreak::Err(e)) => break Err(e)
             }
 
             // After executing, check that any breakpoints were hit.
@@ -942,12 +964,12 @@ impl Simulator {
     /// The difference between this function and [`Simulator::step_in`] is that this
     /// function can return [`SimErr::ProgramHalted`] as an error,
     /// whereas `step_in` will ignore `ProgramHalted` errors.
-    fn step(&mut self) -> Result<(), SimErr> {
+    fn step(&mut self) -> Result<(), StepBreak> {
         self.prefetch = true;
 
         // Call all external interrupts:
-        for ei in &self.external_interrupts {
-            (ei.0)(self)?;
+        for SimInterrupt(cb) in &self.external_interrupts {
+            cb(self)?;
         }
 
         let word = self.mem.read(self.pc, self.default_mem_ctx())?
@@ -1059,7 +1081,7 @@ impl Simulator {
 
                     self.frame_stack.pop_frame();
                 } else {
-                    return Err(SimErr::PrivilegeViolation);
+                    return Err(SimErr::PrivilegeViolation.into());
                 }
             },
             SimInstr::NOT(dr, sr) => {
@@ -1117,8 +1139,9 @@ impl Simulator {
     /// Simulate one step, executing one instruction.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         match self.step() {
-            Err(SimErr::ProgramHalted) => Ok(()),
-            r => r
+            Ok(()) => Ok(()),
+            Err(StepBreak::Halt) => Ok(()),
+            Err(StepBreak::Err(e)) => Err(e)
         }
     }
 

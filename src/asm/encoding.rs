@@ -43,12 +43,10 @@ impl ObjectFile {
         // the source code (n bytes)
         
         let mut bytes = vec![];
-        for (&addr, (data, orig_span)) in self.block_map.iter() {
+        for (&addr, data) in self.block_map.iter() {
             bytes.push(0x00);
             bytes.extend(u16::to_le_bytes(addr));
             bytes.extend(u16::to_le_bytes(data.len() as u16));
-            bytes.extend(u64::to_le_bytes(orig_span.start as u64));
-            bytes.extend(u64::to_le_bytes(orig_span.end as u64));
             for &word in data {
                 if let Some(val) = word {
                     bytes.push(0xFF);
@@ -105,15 +103,12 @@ impl ObjectFile {
                 0x00 => {
                     let addr            = u16::from_le_bytes(take::<2>(&mut vec)?);
                     let data_len        = u16::from_le_bytes(take::<2>(&mut vec)?);
-                    let orig_span_start = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
-                    let orig_span_end   = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
 
-                    let orig_span = orig_span_start..orig_span_end;
                     let data = map_chunks::<_, 3>(take_slice(&mut vec, 3 * usize::from(data_len))?, 
                         |[init, rest @ ..]| (init == 0xFF).then(|| u16::from_le_bytes(rest))
                     );
 
-                    block_map.insert(addr, (data, orig_span));
+                    block_map.insert(addr, data);
                 },
                 0x01 => {
                     let addr       = u16::from_le_bytes(take::<2>(&mut vec)?);
