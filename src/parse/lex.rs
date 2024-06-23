@@ -21,13 +21,13 @@ pub enum Token {
     // These regexes collect what would be considered one discernable unit
     // and validates it using the validator function.
 
-    /// An unsigned numeric value (e.g., `9`, `#14`, x7F`, etc.)
+    /// An unsigned numeric value (e.g., `9`, `#14`, `x7F`, etc.)
     #[regex(r"\d\w*", lex_unsigned_dec)]
     #[regex(r"#\d?\w*", lex_unsigned_dec)]
     #[regex(r"[Xx][\dA-Fa-f]\w*", lex_unsigned_hex)]
     Unsigned(u16),
 
-    /// A signed numeric value (e.g., `-9`, `#-14`, x-7F`, etc.)
+    /// A signed numeric value (e.g., `-9`, `#-14`, `x-7F`, etc.)
     #[regex(r"-\w*", lex_signed_dec)]
     #[regex(r"#-\w*", lex_signed_dec)]
     #[regex(r"[Xx]-\w*", lex_signed_hex)]

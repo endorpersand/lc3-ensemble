@@ -1,17 +1,17 @@
 //! This module holds the AST for statements from assembly source code.
 //! 
-//! For instructions that map to bytecode instructions, see [`sim::SimInstr`].
+//! For instructions that map to bytecode instructions
+//! (i.e., the hex representation of assembly instructions), see [`sim::SimInstr`].
 //! 
 //! Useful structs in this module include:
 //! - [`AsmInstr`]: An enum of all possible assembly source code instructions
 //! - [`Directive`]: An enum of all possible assembly source code directives
 //! - [`Stmt`]: The format for a single "statement" in assembly source code
 //! 
-//! [`sim::SimInstr`]: [`crate::ast::sim::SimInstr`]
+//! [`sim::SimInstr`]: crate::ast::sim::SimInstr`
 use std::fmt::Write as _;
 
 use super::{CondCode, IOffset, ImmOrReg, Label, Offset, PCOffset, Reg, TrapVect8};
-
 
 type PCOffset9 = PCOffset<i16, 9>;
 type PCOffset11 = PCOffset<i16, 11>;
@@ -20,9 +20,10 @@ type PCOffset11 = PCOffset<i16, 11>;
 /// 
 /// The variants in this enum represent instructions before assembly passes.
 /// 
-/// For instructions that map to typeable assembly code, refer to [`sim::SimInstr`].
+/// For instructions that map to bytecode
+/// (i.e., the hex representation of assembly instructions), refer to [`sim::SimInstr`].
 /// 
-/// [`sim::SimInstr`]: [`crate::ast::sim::SimInstr`]
+/// [`sim::SimInstr`]: crate::ast::sim::SimInstr`
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum AsmInstr {
     /// An ADD instruction.

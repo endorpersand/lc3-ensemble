@@ -1,9 +1,10 @@
 //! This module is used for holding simulation instructions ([`SimInstr`]),
 //! which are instructions that directly map to bytecode.
 //! 
-//! For instructions that map to assembly code, see [`asm::AsmInstr`].
+//! For instructions that map to assembly source code 
+//! (i.e., the text representation of assembly instructions), see [`asm::AsmInstr`].
 //! 
-//! [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
+//! [`asm::AsmInstr`]: crate::ast::asm::AsmInstr
 
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -33,9 +34,10 @@ const OP_TRAP: u16 = 0b1111;
 /// The variants in this enum represent instructions after the both assembly passes.
 /// There are no notions of aliases and labels in the variants in this enum.
 /// 
-/// For instructions that map to typeable assembly code, refer to [`asm::AsmInstr`].
+/// For instructions that map to assembly source code 
+/// (i.e., the text representation of assembly instructions), refer to [`asm::AsmInstr`].
 /// 
-/// [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
+/// [`asm::AsmInstr`]: crate::ast::asm::AsmInstr
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimInstr {
     #[allow(missing_docs)]

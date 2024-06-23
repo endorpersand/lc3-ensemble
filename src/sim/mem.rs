@@ -377,7 +377,9 @@ impl WordFiller for WCGenerator {
 /// Context behind a memory access.
 /// 
 /// This struct is used by [`Mem::read`] and [`Mem::write`] to perform checks against memory accesses.
-/// A default memory access context for the given simulator can be constructed with [`super::Simulator::default_mem_ctx`].
+/// A default memory access context for the given simulator can be constructed with [`Simulator::default_mem_ctx`].
+/// 
+/// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
 #[derive(Clone, Copy)]
 pub struct MemAccessCtx {
     /// Whether this access is privileged (false = user, true = supervisor).
@@ -385,6 +387,8 @@ pub struct MemAccessCtx {
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
     /// 
+    /// 
+    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
     /// This does not affect [`Mem::read`].
     pub strict: bool
 }
@@ -393,7 +397,56 @@ const N: usize = 1 << 16;
 const IO_START: u16 = 0xFE00;
 const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 
-/// Memory. This can be addressed with any `u16`.
+/// Memory. 
+/// 
+/// This can be addressed with any `u16` (16-bit address).
+/// 
+/// Note that this struct provides two methods of accessing memory:
+/// - [`Mem::get_raw`] and [`Mem::get_raw_mut`]: direct access to memory values
+/// - [`Mem::read`] and [`Mem::write`]: memory access with privilege checks, strictness checks, and IO updating
+/// 
+/// # `get_raw` and `get_raw_mut`
+/// 
+/// [`Mem::get_raw`] and [`Mem::get_raw_mut`]'s API is simple, it simply accesses the memory value at the address.
+/// Note that this means:
+/// - These functions do not trigger IO effects (and as a result, IO values will not be updated).
+/// - These functions do not perform access violation checks.
+/// 
+/// ```
+/// use lc3_ensemble::sim::mem::Mem;
+/// 
+/// let mut mem = Mem::new(&mut ()); // never should have to initialize mem
+/// mem.get_raw_mut(0x3000).set(11);
+/// assert_eq!(mem.get_raw(0x3000).get(), 11);
+/// ```
+/// 
+/// # `read` and `write`
+/// 
+/// In contrast, [`Mem::read`] and [`Mem::write`] have to account for all of the possible conditions 
+/// behind a memory access.
+/// This means:
+/// - These functions *do* trigger IO effects.
+/// - These functions do perform access violation and strictness checks.
+/// 
+/// Additionally, these functions require a [`MemAccessCtx`], defining the configuration of the access, which consists of:
+/// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
+/// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error (writes only).
+/// 
+/// The [`Simulator`] defines [`Simulator::default_mem_ctx`] to produce this value automatically based on the simulator's state.
+/// ```
+/// use lc3_ensemble::sim::Simulator;
+/// use lc3_ensemble::sim::mem::Word;
+/// 
+/// let mut sim = Simulator::new(Default::default());
+/// 
+/// assert!(sim.mem.write(0x0000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_err());
+/// assert!(sim.mem.write(0x3000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_ok());
+/// assert!(sim.mem.read(0x0000, sim.default_mem_ctx()).is_err());
+/// assert!(sim.mem.read(0x3000, sim.default_mem_ctx()).is_ok());
+/// ```
+/// 
+/// [`Simulator`]: super::Simulator
+/// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
 #[derive(Debug)]
 pub struct Mem {
     data: Box<[Word; N]>,
@@ -514,7 +567,7 @@ impl Mem {
     /// Fallibly reads the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
-    /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
+    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
     /// 
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
@@ -522,6 +575,8 @@ impl Mem {
     /// 
     /// Note that this method is used for simulating a read. If you would like to query the memory's state, 
     /// consider [`Mem::get_raw`].
+    /// 
+    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
     pub fn read(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
 
@@ -536,7 +591,7 @@ impl Mem {
     /// Fallibly writes the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
-    /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
+    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
     /// 
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
@@ -544,6 +599,8 @@ impl Mem {
     /// 
     /// Note that this method is used for simulating a write. If you would like to edit the memory's state, 
     /// consider [`Mem::get_raw_mut`].
+    /// 
+    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
     pub fn write(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
@@ -563,7 +620,19 @@ impl Mem {
 
 /// The register file. 
 /// 
-/// This can be addressed with a [`Reg`], using typical array index notation.
+/// This struct can be indexed with a [`Reg`] 
+/// (which can be constructed using the [`crate::ast::reg_consts`] module or via [`Reg::try_from`]).
+/// 
+/// # Example
+/// 
+/// ```
+/// use lc3_ensemble::sim::mem::RegFile;
+/// use lc3_ensemble::ast::reg_consts::R0;
+/// 
+/// let mut reg = RegFile::new(&mut ()); // never should have to initialize a reg file
+/// reg[R0].set(11);
+/// assert_eq!(reg[R0].get(), 11);
+/// ```
 #[derive(Debug, Clone)]
 pub struct RegFile([Word; 8]);
 impl RegFile {

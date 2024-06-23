@@ -149,8 +149,6 @@ impl IODevice for BufferedIO {
 /// This binds the writer channel to the DSR and DDR.
 /// When a character is ready to be written to the writer channel,
 /// the DSR status is enabled and the character can be written to the DDR.
-/// 
-/// This IO type also exposes the MCR in the MCR MMIO address.
 pub struct BiChannelIO {
     read_data: cbc::Receiver<u8>,
     write_data: cbc::Sender<u8>,

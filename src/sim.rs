@@ -8,7 +8,268 @@
 //! - [`io`]: The module handling simulator IO.
 //! - [`debug`]: The module handling types of breakpoints for the simulator.
 //! - [`frame`]: The module handling the frame stack and call frame management.
-
+//! 
+//! # Usage
+//! 
+//! To simulate some code, you need to instantiate a Simulator and load an object file to it:
+//! 
+//! ```no_run
+//! use lc3_ensemble::sim::Simulator;
+//! 
+//! # let obj_file = panic!("don't actually make an object file");
+//! let mut simulator = Simulator::new(Default::default());
+//! simulator.load_obj_file(&obj_file);
+//! simulator.run().unwrap();
+//! ```
+//! 
+//! ## Flags
+//! 
+//! Here, we define `simulator` to have the default flags. 
+//! We could also configure the simulator by editing the flags. For example,
+//! if we wish to enable real HALT, we can edit the flags like so:
+//! 
+//! ```no_run
+//! # use lc3_ensemble::sim::{Simulator, SimFlags};
+//! let mut simulator = Simulator::new(SimFlags { use_real_halt: true, ..Default::default() });
+//! ```
+//! 
+//! All of the available flags can be found in [`SimFlags`].
+//! 
+//! ## Execution
+//! 
+//! Beyond the basic [`Simulator::run`] (which runs until halting),
+//! there are also: 
+//! - [`Simulator::step_in`], [`Simulator::step_out`], [`Simulator::step_over`]: manual step-by-step simulation
+//! - [`Simulator::run_while`], [`Simulator::run_with_limit`]: more advanced programmatic execution
+//! 
+//! ```
+//! use lc3_ensemble::parse::parse_ast;
+//! use lc3_ensemble::asm::assemble;
+//! use lc3_ensemble::sim::Simulator;
+//! use lc3_ensemble::ast::reg_consts::R0;
+//! 
+//! let src = "
+//!     .orig x3000
+//!     AND R0, R0, #0
+//!     ADD R0, R0, #1
+//!     ADD R0, R0, #1
+//!     ADD R0, R0, #1
+//!     HALT
+//!     .end
+//! ";
+//! let ast = parse_ast(src).unwrap();
+//! let obj_file = assemble(ast).unwrap();
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! sim.load_obj_file(&obj_file);
+//! 
+//! // Running step by step:
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.reg_file[R0].get(), 0);
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.reg_file[R0].get(), 1);
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.reg_file[R0].get(), 2);
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.reg_file[R0].get(), 3);
+//! ```
+//! 
+//! ## Querying State
+//! 
+//! You can query (or set) a variety of different state values from the simulator.
+//! 
+//! - If you wish to access the PC, it can simply be done through the `sim.pc` field.
+//! - If you wish to access the PSR or MCR, the [`Simulator::psr`] and [`Simulator::mcr`] methods are present to query those values.
+//! - If you wish to access the register file, you can access it through the `sim.reg_file` field.
+//! 
+//! [`RegFile`] holds its values in a [`Word`], which is a memory cell which keeps track of initialization state.
+//! Accessing can simply be done with [`Word::get`] and [`Word::set`]:
+//! ```
+//! use lc3_ensemble::sim::Simulator;
+//! use lc3_ensemble::ast::reg_consts::R0;
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! 
+//! sim.reg_file[R0].set(0x1234);
+//! assert_eq!(sim.reg_file[R0].get(), 0x1234);
+//! ```
+//! 
+//! - If you wish to access the memory, [`Mem`] provides two pairs of memory access:
+//!     - [`Mem::read`] and [`Mem::write`] are used for accesses which should trigger access violations and IO.
+//!     - [`Mem::get_raw`] and [`Mem::get_raw_mut`] are used for accesses which directly access the memory.
+//! ```
+//! use lc3_ensemble::sim::Simulator;
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! 
+//! // Raw memory access:
+//! sim.mem.get_raw_mut(0x3000).set(0x5678);
+//! assert_eq!(sim.mem.get_raw(0x3000).get(), 0x5678);
+//! 
+//! // Through read/write:
+//! use lc3_ensemble::sim::mem::Word;
+//! 
+//! assert!(sim.mem.write(0x0000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_err());
+//! assert!(sim.mem.write(0x3000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_ok());
+//! assert!(sim.mem.read(0x0000, sim.default_mem_ctx()).is_err());
+//! assert!(sim.mem.read(0x3000, sim.default_mem_ctx()).is_ok());
+//! ```
+//! 
+//! See more details in [`Mem`].
+//! 
+//! - Other state can be accessed. Consult the [`Simulator`] docs for more information.
+//! 
+//! ### Frames
+//! 
+//! The simulator also keeps track of subroutine frame information, accessible on the `frame_stack` field of [`Simulator`].
+//! 
+//! **If `debug_frames` is not enabled in [`SimFlags`]**, the only information the [`Simulator`] keeps track of
+//! is the number of subroutine frames deep the simulator is (via [`FrameStack::len`]):
+//! - During a JSR instruction, the frame count increases by 1.
+//! - During a RET instruction, the frame count decreases by 1.
+//! 
+//! **If `debug_frames` is enabled in [`SimFlags`]**, the frame information is significantly extended.
+//! The simulator then keeps track of several frame values (such as caller and callee address).
+//! These are accessible via the [`FrameStack::frames`] method.
+//! 
+//! Debug frame information by default includes caller and callee addresses, but can be
+//! configured to also include frame pointer and argument information. See the [`frame`]
+//! module for details.
+//! 
+//! ## Debugging with breakpoints
+//! 
+//! Breakpoints are accessible through the `breakpoints` field on [`Simulator`].
+//! 
+//! To add a `breakpoint`, simply insert a [`Breakpoint`] and 
+//! it will break if its condition is met during all execution functions (except [`Simulator::step_in`]).
+//! 
+//! ```
+//! use lc3_ensemble::parse::parse_ast;
+//! use lc3_ensemble::asm::assemble;
+//! use lc3_ensemble::sim::Simulator;
+//! use lc3_ensemble::sim::debug::Breakpoint;
+//! 
+//! let src = "
+//!     .orig x3000
+//!     ADD R0, R0, #0
+//!     ADD R0, R0, #1
+//!     ADD R0, R0, #2
+//!     ADD R0, R0, #3
+//!     HALT
+//!     .end
+//! ";
+//! let ast = parse_ast(src).unwrap();
+//! let obj_file = assemble(ast).unwrap();
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! sim.load_obj_file(&obj_file);
+//! 
+//! // Without breakpoint
+//! sim.run().unwrap();
+//! assert_eq!(sim.pc, 0x3004);
+//! 
+//! // With breakpoint
+//! sim.reset();
+//! sim.load_obj_file(&obj_file);
+//! sim.breakpoints.insert(Breakpoint::PC(0x3002));
+//! sim.run().unwrap();
+//! assert_eq!(sim.pc, 0x3002);
+//! ```
+//! 
+//! ## IO
+//! 
+//! IO is handled by an [`IODevice`]. When a load or store to a memory-mapped address (0xFE00-0xFFFF) occurs,
+//! the IODevice is queried for that data.
+//! 
+//! The best IO for programmatic uses is [`BufferedIO`], which exposes the IO to [`Vec`] and [`VecDeque`] buffers
+//! that can be modified.
+//! 
+//! If you wish to use the standard I/O (i.e., `stdin`/`stdout`), [`BiChannelIO`] can be used.
+//! 
+//! ```
+//! use lc3_ensemble::parse::parse_ast;
+//! use lc3_ensemble::asm::assemble;
+//! use lc3_ensemble::sim::Simulator;
+//! use lc3_ensemble::sim::io::BufferedIO;
+//! use std::sync::Arc;
+//! 
+//! let src = "
+//!     .orig x3000
+//!     LOOP:
+//!     GETC
+//!     PUTC
+//!     ADD R0, R0, #0
+//!     BRnp LOOP
+//!     HALT
+//!     .end
+//! ";
+//! let ast = parse_ast(src).unwrap();
+//! let obj_file = assemble(ast).unwrap();
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! sim.load_obj_file(&obj_file);
+//! 
+//! let io = BufferedIO::new();
+//! let input = Arc::clone(io.get_input());
+//! let output = Arc::clone(io.get_output());
+//! sim.open_io(io);
+//! 
+//! input.write().unwrap().extend(b"Hello, World!\0");
+//! sim.run().unwrap();
+//! 
+//! assert_eq!(&*input.read().unwrap(), b"");
+//! assert_eq!(&**output.read().unwrap(), b"Hello, World!\0");
+//! ```
+//! 
+//! ## Strictness (experimental)
+//! 
+//! This simulator also features uninitialized memory access checks (via the `strict` flag).
+//! 
+//! These strict memory checks verify that unintialized data is not written to the register files, memory, 
+//! or other areas that do not expect uninitialized data. Uninitialized data here is defined as
+//! data that is unknown as it was never fully set and is dependent on the values the machine was initialized with.
+//! 
+//! The `strict` flag can currently detect:
+//! - Loads of uninitialized data into a register (excluding uninitialized reads from `mem[R6 + offset]`).
+//! - Stores of uninitialized data into memory (excluding uninitialized stores to `mem[R6 + offset]` and `.blkw`'d memory).
+//! - Stores of uninitialized data into memory-mapped IO
+//! - Loads and stores through an uninitialized memory address
+//! - Jumping to an uninitialized address (e.g., via `JSRR` or `JMP`)
+//! - Jumping to a memory location that is uninitialized
+//! - Decoding an instruction from uninitialized data
+//! - Setting the PSR to an uninitialized value
+//! 
+//! Note that this is considered *experimental* as false positives can still occur.
+//! Also note that the exceptions for loads and stores of uninitialized data
+//! are present to prevent typical value manipulation on the stack or in stored memory
+//! from triggering a strictness error.
+//! 
+//! ```
+//! use lc3_ensemble::parse::parse_ast;
+//! use lc3_ensemble::asm::assemble;
+//! use lc3_ensemble::sim::{Simulator, SimErr};
+//! 
+//! let src = "
+//!     .orig x3000
+//!     ADD R0, R0, #0
+//!     ADD R0, R0, #15 ;; R0 = 15
+//!     HALT
+//!     .end
+//! ";
+//! let ast = parse_ast(src).unwrap();
+//! let obj_file = assemble(ast).unwrap();
+//! 
+//! let mut sim = Simulator::new(Default::default());
+//! sim.load_obj_file(&obj_file);
+//! sim.flags.strict = true;
+//! 
+//! // Strictness check detects `R0` was set without first being cleared.
+//! assert!(matches!(sim.run(), Err(SimErr::StrictRegSetUninit)));
+//! assert_eq!(sim.prefetch_pc(), 0x3000);
+//! ```
+//! 
+//! [`VecDeque`]: std::collections::VecDeque
+//! [`Breakpoint`]: self::debug::Breakpoint
 pub mod mem;
 pub mod io;
 pub mod debug;
@@ -477,11 +738,8 @@ impl Simulator {
     }
     /// Gets the value of the prefetch PC.
     /// 
-    /// This function returns the value of PC before it is incremented druing fetch,
-    /// which is also the location of the currently executing instruction in memory.
-    /// 
-    /// This is useful for pointing to a given memory location in error handling,
-    /// as this computation always points to the memory location of the instruction.
+    /// This function is useful as it returns the location of the currently
+    /// executing instruction in memory.
     pub fn prefetch_pc(&self) -> u16 {
         self.pc - (!self.prefetch) as u16
     }
@@ -663,11 +921,16 @@ impl Simulator {
     }
 
     /// Execute the program.
+    /// 
+    /// This blocks until the program ends. 
+    /// If you would like to limit the maximum number of steps to execute, consider [`Simulator::run_with_limit`].
     pub fn run(&mut self) -> Result<(), SimErr> {
         self.run_while(|_| true)
     }
 
     /// Execute the program with a limit on how many steps to execute.
+    /// 
+    /// This blocks until the program ends or until the number of steps to execute has been hit.
     pub fn run_with_limit(&mut self, max_steps: u64) -> Result<(), SimErr> {
         let i = self.instructions_run;
         self.run_while(|sim| sim.instructions_run.wrapping_sub(i) < max_steps)
@@ -896,13 +1159,23 @@ impl Default for Simulator {
 /// - `PSR[8..11]`:  Interrupt priority
 /// - `PSR[0..3]`:   Condition codes
 /// 
+/// ```text
+///         privilege
+///         |     interrupt priority
+///         |     |         condition codes
+///         |     |         |
+///         V     V         V
+/// 0x8002: 1000 0000 0000 0010
+///         ~     ~~~       ~~~
+/// ```
+/// 
 /// Each of these are exposed as the [`PSR::privileged`], [`PSR::priority`], and [`PSR::cc`] values.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(transparent)]
 pub struct PSR(pub u16);
 
 impl PSR {
-    /// Creates a PSR with a default value.
+    /// Creates a PSR with a default value (user mode, `z` condition code).
     pub fn new() -> Self {
         PSR(0x8002)
     }

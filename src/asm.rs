@@ -4,7 +4,7 @@
 //! that can be executed by the simulator.
 //! 
 //! The assembler module notably consists of:
-//! - [`assemble`]: The main function which assembles the statements into an object file.
+//! - [`assemble`] and [`assemble_debug`]: The main functions which assemble the statements into an object file.
 //! - [`SymbolTable`]: a struct holding the symbol table, which stores location information for labels after the first assembler pass
 //! - [`ObjectFile`]: a struct holding the object file, which can be loaded into the simulator and executed
 //! 
@@ -26,13 +26,59 @@ use crate::err::ErrSpan;
 
 
 /// Assembles a assembly source code AST into an object file.
+/// 
+/// This function assembles the source AST *without* including debug symbols
+/// in the object file.
+/// See [`SymbolTable`] for more details about debug symbols.
+/// 
+/// # Example
+/// ```
+/// use lc3_ensemble::parse::parse_ast;
+/// use lc3_ensemble::asm::assemble;
+/// 
+/// let src = "
+///     .orig x3000
+///     LABEL: HALT
+///     .end
+/// ";
+/// let ast = parse_ast(src).unwrap();
+/// 
+/// let obj_file = assemble(ast);
+/// assert!(obj_file.is_ok());
+/// 
+/// // Symbol table doesn't exist in object file:
+/// let obj_file = obj_file.unwrap();
+/// assert!(obj_file.symbol_table().is_none());
+/// ```
 pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
     let sym = SymbolTable::new(&ast, None)?;
     create_obj_file(ast, sym, false)
 }
 /// Assembles a assembly source code AST into an object file.
 /// 
-/// This also registers debug symbols to the object file.
+/// This function assembles the source AST *and* includes debug symbols
+/// in the object file.
+/// See [`SymbolTable`] for more details about debug symbols.
+/// 
+/// # Example
+/// ```
+/// use lc3_ensemble::parse::parse_ast;
+/// use lc3_ensemble::asm::assemble_debug;
+/// 
+/// let src = "
+///     .orig x3000
+///     LABEL: HALT
+///     .end
+/// ";
+/// let ast = parse_ast(src).unwrap();
+/// 
+/// let obj_file = assemble_debug(ast, src);
+/// assert!(obj_file.is_ok());
+/// 
+/// // Symbol table does exist in object file:
+/// let obj_file = obj_file.unwrap();
+/// assert!(obj_file.symbol_table().is_some());
+/// ```
 pub fn assemble_debug(ast: Vec<Stmt>, src: &str) -> Result<ObjectFile, AsmErr> {
     let sym = SymbolTable::new(&ast, Some(src))?;
     create_obj_file(ast, sym, true)
@@ -90,7 +136,7 @@ fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<Obje
 
 /// Kinds of errors that can occur from assembling given assembly code.
 /// 
-/// Error with span information is [`AsmErr`].
+/// See [`AsmErr`] for this error type with span information included.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum AsmErrKind {
     /// Cannot determine address of label (pass 1).
@@ -358,8 +404,8 @@ impl SourceInfo {
 /// 
 /// The symbol table consists of: 
 /// - A mapping from source code labels to memory addresses.
-/// - A mapping from source code line numbers to memory addresses (if debug symbols are enabled, see [`SymbolTable::new`]).
-/// - The source text (if debug symbols are enabled, see [`SymbolTable::new`]).
+/// - A mapping from source code line numbers to memory addresses (if debug symbols are enabled).
+/// - The source text (if debug symbols are enabled).
 /// 
 /// Here is a table of the mappings that the symbol table provides:
 /// 
@@ -368,6 +414,21 @@ impl SourceInfo {
 /// | label          | -                                  | [`SymbolTable::lookup_label`] | [`SymbolTable::get_label_source`] |
 /// | memory address | [`SymbolTable::rev_lookup_label`]  | -                             | [`SymbolTable::rev_lookup_line`]  |
 /// | source line    | none                               | [`SymbolTable::lookup_line`]  | -                                 |
+/// 
+/// # Debug symbols
+/// 
+/// Debug symbols are optional data added to this symbol table which can help users debug their code.
+/// 
+/// Without debug symbols, the symbol table only consists of mappings from labels to spans (and vice-versa).
+/// These are used to translate labels in source code to addresses during the assembly process.
+/// After the completion of this assembly process, the [`SymbolTable`] is dropped and is not part of the resultant
+/// [`ObjectFile`].
+/// 
+/// However, with debug symbols, this information persists in the resultant [`ObjectFile`], allowing
+/// the label mappings to be accessed during simulation time. Additionally, more information from the source
+/// text is available during simulation time:
+/// - Mappings from source code line numbers to memory addresses
+/// - Source code text (which grants access to line contents from a given line number; see [`SourceInfo`] for more details)
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, (u16, usize)>,
@@ -385,10 +446,30 @@ impl SymbolTable {
     /// This performs the first assembler pass, calculating the memory address of
     /// labels at each provided statement.
     /// 
-    /// If a `src` argument is provided, this also computes debug symbols and includes them
-    /// within this `SymbolTable` struct. These debug symbols include:
-    /// - Mappings from source code line numbers to memory addresses
-    /// - Source code text (and more detailed calculations with source code, see [`SourceInfo`] for more details)
+    /// If a `src` argument is provided, debug symbols are also computed for the symbol table.
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "
+    ///     .orig x3000
+    ///     LABEL: HALT
+    ///     .end
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// // without debug symbols
+    /// let sym = SymbolTable::new(&ast, None).unwrap();
+    /// assert_eq!(sym.lookup_label("LABEL"), Some(0x3000));
+    /// assert_eq!(sym.lookup_line(2), None);
+    /// 
+    /// // with debug symbols
+    /// let sym = SymbolTable::new(&ast, Some(src)).unwrap();
+    /// assert_eq!(sym.lookup_label("LABEL"), Some(0x3000));
+    /// assert_eq!(sym.lookup_line(2), Some(0x3000));
+    /// ```
     pub fn new(stmts: &[Stmt], src: Option<&str>) -> Result<Self, AsmErr> {
         struct Cursor {
             // The current location counter.
@@ -426,6 +507,8 @@ impl SymbolTable {
         for stmt in stmts {
             // Add labels if they exist
             if !stmt.labels.is_empty() {
+                // If cursor does not exist, that means we're not in an .orig block,
+                // so these labels don't have a known location
                 let Some(cur) = lc.as_ref() else {
                     let spans = stmt.labels.iter()
                         .map(|label| label.span())
@@ -434,6 +517,7 @@ impl SymbolTable {
                     return Err(AsmErr::new(AsmErrKind::UndetAddrLabel, spans));
                 };
 
+                // Add labels
                 for label in &stmt.labels {
                     match labels.entry(label.name.to_uppercase()) {
                         Entry::Occupied(e) => {
@@ -458,16 +542,20 @@ impl SymbolTable {
                 _ => {}
             };
 
-            // Shift the location counter, and link the source line with the LC.
+            // If we're keeping track of the line counter currently (i.e., are inside of a .orig block):
             if let Some(cur) = &mut lc {
+                // Debug symbol:
+                // Calculate which source code line is associated with the instruction the LC is currently pointing to
+                // and add the mapping from line to instruction address.
+                #[allow(clippy::collapsible_if)]
                 if src.is_some() {
-                    // Calculate line index and put it in self.lines.
                     if !matches!(stmt.nucleus, StmtKind::Directive(Directive::Orig(_) | Directive::End)) {
                         let line_index = nl_indices.partition_point(|&start| start < stmt.span.start);
                         lines[line_index].replace(cur.lc);
                     }
                 }
 
+                // Shift the LC forward
                 let success = match &stmt.nucleus {
                     StmtKind::Instr(_)     => cur.shift(1),
                     StmtKind::Directive(d) => cur.shift(d.word_len()),
@@ -477,25 +565,79 @@ impl SymbolTable {
             }
         }
 
-        match lc {
-            None => Ok(SymbolTable {
-                label_map: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
-                line_map: LineSymbolMap::new(lines),
-                src_info: src.map(|s| SourceInfo {
-                    src: s.to_string(),
-                    nl_indices,
-                })
-            }),
-            Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
+        if let Some(cur) = lc {
+            return Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig));
         }
+        
+        let label_map = labels.into_iter()
+            .map(|(k, (addr, span))| (k, (addr, span.start))) // optimization
+            .collect();
+        let line_map = LineSymbolMap::new(lines);
+        let src_info = src.map(|s| SourceInfo { src: s.to_string(), nl_indices });
+        
+        Ok(SymbolTable { label_map, line_map, src_info })
     }
 
     /// Gets the memory address of a given label (if it exists).
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "
+    ///     .orig x3000
+    ///     LOOP:
+    ///         ADD R0, R0, #1
+    ///         BR LOOP
+    ///     LOOP2:
+    ///         ADD R0, R0, #2
+    ///         BR LOOP2
+    ///     LOOP3:
+    ///         ADD R0, R0, #3
+    ///         BR LOOP3
+    ///     .end
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// let sym = SymbolTable::new(&ast, None).unwrap();
+    /// assert_eq!(sym.lookup_label("LOOP"), Some(0x3000));
+    /// assert_eq!(sym.lookup_label("LOOP2"), Some(0x3002));
+    /// assert_eq!(sym.lookup_label("LOOP3"), Some(0x3004));
+    /// assert_eq!(sym.lookup_label("LOOP_DE_LOOP"), None);
+    /// ```
     pub fn lookup_label(&self, label: &str) -> Option<u16> {
         self.label_map.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
-
+    
     /// Gets the label at a given memory address (if it exists).
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "
+    ///     .orig x3000
+    ///     LOOP:
+    ///         ADD R0, R0, #1
+    ///         BR LOOP
+    ///     LOOP2:
+    ///         ADD R0, R0, #2
+    ///         BR LOOP2
+    ///     LOOP3:
+    ///         ADD R0, R0, #3
+    ///         BR LOOP3
+    ///     .end
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// let sym = SymbolTable::new(&ast, None).unwrap();
+    /// assert_eq!(sym.rev_lookup_label(0x3000), Some("LOOP"));
+    /// assert_eq!(sym.rev_lookup_label(0x3002), Some("LOOP2"));
+    /// assert_eq!(sym.rev_lookup_label(0x3004), Some("LOOP3"));
+    /// assert_eq!(sym.rev_lookup_label(0x2110), None);
+    /// ```
     pub fn rev_lookup_label(&self, addr: u16) -> Option<&str> {
         let (label, _) = self.label_map.iter()
             .find(|&(_, (label_addr, _))| label_addr == &addr)?;
@@ -504,6 +646,25 @@ impl SymbolTable {
     }
 
     /// Gets the source span of a given label (if it exists).
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "
+    ///     .orig x3000
+    ///     LOOPY:
+    ///         ADD R0, R0, #1
+    ///         BR LOOPY
+    ///     .end
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// let sym = SymbolTable::new(&ast, None).unwrap();
+    /// assert_eq!(sym.get_label_source("LOOPY"), Some(21..26));
+    /// assert_eq!(sym.get_label_source("LOOP_DE_LOOP"), None);
+    /// ```
     pub fn get_label_source(&self, label: &str) -> Option<Range<usize>> {
         let &(_, start) = self.label_map.get(label)?;
         Some(start..(start + label.len()))
@@ -512,6 +673,41 @@ impl SymbolTable {
     /// Gets the address of a given source line.
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
+    /// Note that each address is mapped to at most one source code line.
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "              ;;  0
+    ///     .orig x3000          ;;  1
+    ///     LOOP:                ;;  2
+    ///         ADD R0, R0, #1   ;;  3
+    ///         BR LOOP          ;;  4
+    ///     .fill x9999          ;;  5
+    ///     .blkw 10             ;;  6
+    ///     LOOP2:               ;;  7
+    ///         ADD R0, R0, #3   ;;  8
+    ///         BR LOOP3         ;;  9
+    ///     .end                 ;; 10
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// // Debug symbols required:
+    /// let sym = SymbolTable::new(&ast, Some(src)).unwrap();
+    /// assert_eq!(sym.lookup_line(0),  None);
+    /// assert_eq!(sym.lookup_line(1),  None);
+    /// assert_eq!(sym.lookup_line(2),  None);
+    /// assert_eq!(sym.lookup_line(3),  Some(0x3000));
+    /// assert_eq!(sym.lookup_line(4),  Some(0x3001));
+    /// assert_eq!(sym.lookup_line(5),  Some(0x3002));
+    /// assert_eq!(sym.lookup_line(6),  Some(0x3003));
+    /// assert_eq!(sym.lookup_line(7),  None);
+    /// assert_eq!(sym.lookup_line(8),  Some(0x300D));
+    /// assert_eq!(sym.lookup_line(9),  Some(0x300E));
+    /// assert_eq!(sym.lookup_line(10), None);
+    /// ```
     pub fn lookup_line(&self, line: usize) -> Option<u16> {
         self.line_map.get(line)
     }
@@ -522,6 +718,46 @@ impl SymbolTable {
     /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
     /// 
     /// If debug symbols are not enabled, this unconditionally returns `None`.
+    /// Note that each source code line is mapped to at most one address.
+    /// 
+    /// ## Example
+    /// ```
+    /// use lc3_ensemble::parse::parse_ast;
+    /// use lc3_ensemble::asm::SymbolTable;
+    /// 
+    /// let src = "              ;;  0
+    ///     .orig x3000          ;;  1
+    ///     LOOP:                ;;  2
+    ///         ADD R0, R0, #1   ;;  3
+    ///         BR LOOP          ;;  4
+    ///     .fill x9999          ;;  5
+    ///     .blkw 10             ;;  6
+    ///     LOOP2:               ;;  7
+    ///         ADD R0, R0, #3   ;;  8
+    ///         BR LOOP3         ;;  9
+    ///     .end                 ;; 10
+    /// ";
+    /// let ast = parse_ast(src).unwrap();
+    /// 
+    /// // Debug symbols required:
+    /// let sym = SymbolTable::new(&ast, Some(src)).unwrap();
+    /// assert_eq!(sym.rev_lookup_line(0x3000),  Some(3));
+    /// assert_eq!(sym.rev_lookup_line(0x3001),  Some(4));
+    /// assert_eq!(sym.rev_lookup_line(0x3002),  Some(5));
+    /// assert_eq!(sym.rev_lookup_line(0x3003),  Some(6));
+    /// assert_eq!(sym.rev_lookup_line(0x3004),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x3005),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x3006),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x3007),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x3008),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x3009),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x300A),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x300B),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x300C),  None);
+    /// assert_eq!(sym.rev_lookup_line(0x300D),  Some(8));
+    /// assert_eq!(sym.rev_lookup_line(0x300E),  Some(9));
+    /// assert_eq!(sym.rev_lookup_line(0x300F),  None);
+    /// ```
     pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
         self.line_map.find(addr)
     }

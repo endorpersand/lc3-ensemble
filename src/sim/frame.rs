@@ -4,6 +4,113 @@
 //! - [`FrameStack`]: The frame stack used by the Simulator.
 //! - [`Frame`]: All the data from a given frame.
 //! - [`ParameterList`]: An enum which defines the signature of a subroutine or trap.
+//! 
+//! # Usage
+//! 
+//! [`FrameStack`] is available on the [`Simulator`] via the `frame_stack` field, and the extent of its functionality
+//! depends on the [`Simulator`]'s `debug_frames` flag.
+//! 
+//! If `debug_frames` is not enabled, `FrameStack` only holds the frame depth 
+//! (how many frames deep the simulator is in execution) in [`FrameStack::len`]:
+//! - After a JSR instruction, the frame count increases by one.
+//! - After a RET instruction, the frame count decreases by one.
+//! 
+//! If `debug_frames` is enabled, `FrameStack` also holds more data from a given frame, 
+//! such as caller and callee address. This is accessible via [`FrameStack::frames`].
+//! 
+//! The simulator also has the capability to keep track of the arguments introduced
+//! to a frame and the frame pointer address of the frame; however, this requires
+//! defining a subroutine signature using [`FrameStack::set_subroutine_def`].
+//! 
+//! ```
+//! use lc3_ensemble::parse::parse_ast;
+//! use lc3_ensemble::asm::assemble;
+//! use lc3_ensemble::sim::Simulator;
+//! use lc3_ensemble::sim::frame::ParameterList;
+//! use lc3_ensemble::ast::reg_consts::R0;
+//! 
+//! let src = "
+//!     .orig x3000
+//!     AND R0, R0, #0
+//!     JSR FOO
+//!     HALT
+//!     
+//!     FOO:
+//!     ADD R0, R0, #10
+//!     RET
+//!     .end
+//! ";
+//! let ast = parse_ast(src).unwrap();
+//! let obj_file = assemble(ast).unwrap();
+//! 
+//! // debug_frames: false
+//! let mut sim = Simulator::new(Default::default());
+//! sim.load_obj_file(&obj_file);
+//! 
+//! // AND R0, R0, #0
+//! assert_eq!(sim.frame_stack.len(), 0);
+//! // JSR FOO
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.frame_stack.len(), 0);
+//! // ADD R0, R0, #10
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.frame_stack.len(), 1);
+//! // RET
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.frame_stack.len(), 1);
+//! // HALT
+//! sim.step_in().unwrap();
+//! assert_eq!(sim.frame_stack.len(), 0);
+//! 
+//! // debug_frames: true
+//! sim.flags.debug_frames = true;
+//! sim.reset();
+//! sim.load_obj_file(&obj_file);
+//! 
+//! let pl = ParameterList::with_pass_by_register(&[("input", R0)], Some(R0)); // fn(R0) -> R0
+//! sim.frame_stack.set_subroutine_def(0x3003, pl);
+//! 
+//! sim.step_in().unwrap();
+//! sim.step_in().unwrap();
+//! 
+//! let frames = sim.frame_stack.frames().unwrap();
+//! assert_eq!(frames.len(), 1);
+//! assert_eq!(frames[0].caller_addr, 0x3001);
+//! assert_eq!(frames[0].callee_addr, 0x3003);
+//! assert_eq!(frames[0].arguments[0].get(), 0);
+//! ```
+//! 
+//! # Subroutine definitions
+//! 
+//! Subroutine definitions come in two flavors: 
+//! standard LC-3 calling convention, and pass-by-register calling convention.
+//! 
+//! With standard LC-3 calling convention subroutines:
+//! - the arguments and return value are placed on the stack in their standard positions
+//! - the notion of a frame pointer exists, and is present in [`Frame`]'s data
+//! - when declaring a LC-3 calling convention subroutine, you only specify the argument names:
+//! ```
+//! # use lc3_ensemble::sim::frame::ParameterList;
+//! // equivalent to fn(arg1, arg2) -> _
+//! let pl = ParameterList::with_calling_convention(&["arg1", "arg2"]);
+//! ```
+//! 
+//! With pass-by-register calling convention subroutine:
+//! - the arguments are placed in specific registers, and the return value comes from a specific register
+//! - a pass-by-register subroutine has to define an argument name and the associated register per argument:
+//! ```
+//! # use lc3_ensemble::sim::frame::ParameterList;
+//! # use lc3_ensemble::ast::reg_consts::*;
+//! // equivalent to fn(arg1: R0, arg2: R1) -> _
+//! let pl = ParameterList::with_pass_by_register(&[("arg1", R0), ("arg2", R1)], None);
+//! // equivalent to fn(arg1: R0, arg2: R1) -> R0
+//! let pl = ParameterList::with_pass_by_register(&[("arg1", R0), ("arg2", R1)], Some(R0));
+//! ```
+//! 
+//! The argument names are not used by the [`Simulator`], but can be accessed by other APIs 
+//! via the [`FrameStack::get_subroutine_def`] method.
+//! 
+//! [`Simulator`]: super::Simulator
 
 use std::collections::HashMap;
 

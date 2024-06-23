@@ -4,7 +4,10 @@
 //! into abstract syntax trees that maintain all of the information of the source code
 //! in an easier to handle format.
 //! 
-//! The parser module consists of:
+//! The main function to use from this module is [`parse_ast`], 
+//! which parses an assembly code program into an AST.
+//! 
+//! However, if needed, the internals of this module are also available:
 //! - [`lex`]: the implementation of the lexer/tokenizer
 //! - [`Parser`]: the main logic for the parser
 //! - [`Parse`]: the implementation to "parse" an AST component
@@ -25,7 +28,22 @@ use self::lex::LexErr;
 
 /// Parses an assembly source code string into a `Vec` of statements.
 /// 
-/// This is a shortcut from repeatedly using the [`Parser`].
+/// # Example
+/// ```
+/// use lc3_ensemble::parse::parse_ast;
+/// 
+/// let src = "
+///     .orig x3000
+///     THIS: ADD R0, R0, #0
+///     IS: ADD R1, R1, #1
+///     A: ADD R2, R2, #2
+///     PROGRAM: ADD R3, R3, #3
+///     .end
+/// ";
+/// 
+/// let ast = parse_ast(src).unwrap();
+/// assert_eq!(ast.len(), 6);
+/// ```
 pub fn parse_ast(s: &str) -> Result<Vec<Stmt>, ParseErr> {
     let mut parser = Parser::new(s)?;
     // Horrendous one-liner version of this:
@@ -690,7 +708,7 @@ impl Parse for Stmt {
         }
         
         let (nucleus, span) = parser.spanned(|parser| {
-                match parser.peek() {
+            match parser.peek() {
                 Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
                 Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
                 _ => {

@@ -1,4 +1,10 @@
-//! Error interfaces for this crate.
+//! Error interface for this crate.
+//! 
+//! This module creates an [`Error`] trait implemented by error types in this crate.
+//! 
+//! The error trait extends the standard library's [`std::error::Error`] type by
+//! adding a `help` method (to help assist the user in fixing the issue),
+//! and a `span` method (to point to where the error occurs).
 
 use std::borrow::Cow;
 
