@@ -53,7 +53,7 @@ use super::{IODevice, SimErr, SimIOwMCR};
 /// When a `Word` is created for memory/register files (i.e., via [`Word::new_uninit`]), 
 /// it is created with the initialization bits set to fully uninitialized.
 /// The data associated with this `Word` is decided by the creation strategy 
-/// (see [`super::WordCreateStrategy`] for details).
+/// (see [`super::MachineInitStrategy`] for details).
 #[derive(Debug, Clone, Copy)]
 pub struct Word {
     data: u16,
@@ -329,7 +329,7 @@ impl WordFiller for StdRng {
 /// 
 /// [`Simulator`]: super::Simulator
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
-pub enum WordCreateStrategy {
+pub enum MachineInitStrategy {
     /// Initializes each word randomly and non-deterministically.
     #[default]
     Unseeded,
@@ -347,14 +347,14 @@ pub enum WordCreateStrategy {
     }
 }
 
-impl WordCreateStrategy {
+impl MachineInitStrategy {
     pub(super) fn generator(&self) -> impl WordFiller {
         use rand::SeedableRng;
 
         match self {
-            WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
-            WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
-            WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
+            MachineInitStrategy::Unseeded => WCGenerator::Unseeded,
+            MachineInitStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
+            MachineInitStrategy::Known { value } => WCGenerator::Known(*value),
         }
     }
 }

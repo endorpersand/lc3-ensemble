@@ -286,7 +286,7 @@ use io::*;
 
 use self::debug::BreakpointList;
 use self::frame::{FrameStack, FrameType};
-use self::mem::{Mem, MemAccessCtx, RegFile, Word, WordCreateStrategy};
+use self::mem::{Mem, MemAccessCtx, RegFile, Word, MachineInitStrategy};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -459,7 +459,7 @@ pub struct SimFlags {
     /// The creation strategy for uninitialized Words.
     /// 
     /// This is used to initialize the `mem` and `reg_file` fields.
-    pub word_create_strat: WordCreateStrategy,
+    pub machine_init: MachineInitStrategy,
 
     /// Whether to store debugging information about call frames.
     /// 
@@ -472,13 +472,13 @@ impl Default for SimFlags {
     /// They are defined as follows:
     /// - `strict`: false
     /// - `use_real_halt`: false
-    /// - `word_create_strat`: default [`WordCreateStrategy`]
+    /// - `machine_init`: default [`MachineInitStrategy`]
     /// - `debug_frames`: false
     fn default() -> Self {
         Self {
             strict: false,
             use_real_halt: false,
-            word_create_strat: Default::default(),
+            machine_init: Default::default(),
             debug_frames: false
         }
     }
@@ -577,7 +577,7 @@ impl Simulator {
     /// 
     /// This also allows providing an MCR atomic which is used by the Simulator.
     fn new_with_mcr(flags: SimFlags, mcr: Arc<AtomicBool>) -> Self {
-        let mut filler = flags.word_create_strat.generator();
+        let mut filler = flags.machine_init.generator();
 
         let mut sim = Self {
             mem: Mem::new(&mut filler),
