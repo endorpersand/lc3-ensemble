@@ -226,18 +226,6 @@ impl Comparator {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use crate::ast::reg_consts::R7;
-    use crate::sim::debug::{Breakpoint, Comparator};
-
-    #[test]
-    fn print() {
-        println!("{:?}", Breakpoint::Reg { reg: R7, value: Comparator::Lt(14) } & Breakpoint::Reg { reg: R7, value: Comparator::Ge(10) });
-        println!("{:?}", Breakpoint::Mem { addr: 0x4000, value: Comparator::Lt(14) } | Breakpoint::Mem { addr: 0x5000, value: Comparator::Ge(10) } & Breakpoint::PC(0x3000));
-    }
-}
-
 /// A list of breakpoints.
 /// 
 /// This works similarly to GDB breakpoints, in that creating a breakpoint
