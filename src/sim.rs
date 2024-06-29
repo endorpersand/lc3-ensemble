@@ -275,6 +275,7 @@ pub mod io;
 pub mod debug;
 pub mod frame;
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -282,9 +283,9 @@ use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
+use debug::Breakpoint;
 use io::*;
 
-use self::debug::BreakpointList;
 use self::frame::{FrameStack, FrameType};
 use self::mem::{Mem, MemAccessCtx, RegFile, Word, MachineInitStrategy};
 
@@ -560,7 +561,7 @@ pub struct Simulator {
     pub flags: SimFlags,
 
     /// Breakpoints for the simulator.
-    pub breakpoints: BreakpointList,
+    pub breakpoints: HashSet<Breakpoint>,
 
     /// Functions that are run every step that can pause execution of the `Simulator`.
     /// 
@@ -932,7 +933,7 @@ impl Simulator {
             }
 
             // After executing, check that any breakpoints were hit.
-            if self.breakpoints.values().any(|bp| bp.check(self)) {
+            if self.breakpoints.iter().any(|bp| bp.check(self)) {
                 break Ok(PauseCondition::Breakpoint);
             }
         };
