@@ -1218,6 +1218,18 @@ impl PSR {
     pub fn cc(&self) -> u8 {
         (self.0 & 0b111) as u8
     }
+    /// Checks the condition code of the simulator is `n`.
+    pub fn is_n(&self) -> bool {
+        self.cc() & 0b100 != 0
+    }
+    /// Checks the condition code of the simulator is `z`.
+    pub fn is_z(&self) -> bool {
+        self.cc() & 0b010 != 0
+    }
+    /// Checks the condition code of the simulator is `p`.
+    pub fn is_p(&self) -> bool {
+        self.cc() & 0b001 != 0
+    }
     /// Sets whether the simulator is in privileged mode.
     pub fn set_privileged(&mut self, privl: bool) {
         self.0 &= 0x7FFF;
@@ -1226,12 +1238,24 @@ impl PSR {
     /// Sets the current interrupt priority of the simulator.
     pub fn set_priority(&mut self, prio: u8) {
         self.0 &= 0xF8FF;
-        self.0 |= (prio as u16) << 8;
+        self.0 |= ((prio & 0b111) as u16) << 8;
     }
     /// Sets the condition code of the simulator.
     pub fn set_cc(&mut self, cc: u8) {
         self.0 &= 0xFFF8;
-        self.0 |= cc as u16;
+        self.0 |= (cc & 0b111) as u16;
+    }
+    /// Sets the condition code of the simulator to `n`.
+    pub fn set_cc_n(&mut self) {
+        self.set_cc(0b100)
+    }
+    /// Sets the condition code of the simulator to `z`.
+    pub fn set_cc_z(&mut self) {
+        self.set_cc(0b010)
+    }
+    /// Sets the condition code of the simulator to `p`.
+    pub fn set_cc_p(&mut self) {
+        self.set_cc(0b001)
     }
 }
 impl Default for PSR {
