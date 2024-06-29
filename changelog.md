@@ -1,3 +1,23 @@
+# 0.5.0 (June 29, 2024)
+
+- Added significantly more documentation and examples
+- Removed unnecessary APIs
+  - Majority of `ObjectFile`'s methods
+  - `Simulator::set_pc`, `Simulator::offset_pc` (just set `sim.pc` directly)
+  - `Simulator::load_os` (useless to expose as this is done always)
+  - `InterruptErr::new` (adjusted `Simulator::add_external_interrupt` to no longer require)
+  - `SimErr::ProgramHalted` (useless to expose as it is never returned as an error)
+  - Debug API
+    - Removed `Breakpoint::Generic`, `Breakpoint::And`, and `Breakpoint::Or` (too niche)
+    - Removed `BreakpointList` (simplification of above allows for use of `HashSet<Breakpoint>` instead)
+  - IO API
+    - Removed `SimIO`, `CustomIO` (adjusted `Simulator::open_io` to no longer require)
+- Renamed `WordCreateStrategy` to `MachineInitStrategy`
+- `sim.breakpoints` is now a `HashSet` and can be appended to directly
+- `Simulator::open_io` now accepts all `IODevice`s without having to box beforehand
+- `Simulator::add_external_interrupt` now accepts all `Errors` without having to be wrapped in `InterruptErr` beforehand
+- `PSR::is_*`, `PSR::set_cc_*` for n, z, p
+
 # 0.4.2 (May 15, 2024)
 
 - Replace `slotmap` implementation of BreakpointList with an incremental one

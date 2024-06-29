@@ -88,7 +88,6 @@ fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
         .ok_or_else(|| report_simple(obj_input, "could not parse object file"))?;
 
     let mut sim = Simulator::new(Default::default());
-    sim.load_os();
     sim.load_obj_file(&obj);
     sim.flags = SimFlags {
         strict,
@@ -165,7 +164,6 @@ impl lc3_ensemble::err::Error for ReportSimErr {
             SimErr::InvalidInstrFormat  => None,
             SimErr::PrivilegeViolation  => Some("RTI can only be called in supervisor mode".into()),
             SimErr::AccessViolation     => None,
-            SimErr::ProgramHalted       => Some("you should not see this error. uh oh.".into()),
             SimErr::Interrupt(_)        => None,
             SimErr::StrictRegSetUninit  => None,
             SimErr::StrictMemSetUninit  => None,
