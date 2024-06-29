@@ -666,8 +666,8 @@ impl Simulator {
     }
     
     /// Sets and initializes the IO handler.
-    pub fn open_io<IO: Into<SimIO>>(&mut self, io: IO) {
-        self.mem.io.inner = io.into();
+    pub fn open_io<IO: IODevice>(&mut self, io: IO) {
+        self.mem.io.inner = io._to_sim_io(io::internals::ToSimIOToken(()));
     }
 
     /// Closes the IO handler, waiting for it to close.

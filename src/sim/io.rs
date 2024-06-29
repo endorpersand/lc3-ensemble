@@ -1,13 +1,14 @@
 //! IO handling for LC-3.
 //! 
 //! The interface for IO devices is defined with the [`IODevice`] trait.
-//! This is exposed to the simulator with the [`SimIO`] enum.
+//! The simulator can be configured to interact with a given IO device with [`Simulator::open_io`].
 //! 
-//! Besides those two key items, this module also includes:
+//! Besides the trait, this module also includes:
 //! - [`EmptyIO`]: An `IODevice` holding the implementation for a lack of IO support.
 //! - [`BufferedIO`]: An `IODevice` holding a buffered implementation for IO.
 //! - [`BiChannelIO`]: An `IODevice` holding a threaded/channel implementation for IO.
-//! - [`CustomIO`]: An `IODevice` that can be used to wrap around custom IO implementations.
+//! 
+//! [`Simulator::open_io`]: super::Simulator::open_io
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -23,7 +24,7 @@ const DDR: u16  = 0xFE06;
 const MCR: u16  = 0xFFFE;
 
 /// An IO device that can be read/written to.
-pub trait IODevice {
+pub trait IODevice: Send + Sync + 'static {
     /// Reads the data at the given memory-mapped address.
     /// 
     /// If successful, this returns the value returned from that address.
@@ -34,6 +35,17 @@ pub trait IODevice {
     /// 
     /// This returns whether the write was successful or not.
     fn io_write(&mut self, addr: u16, data: u16) -> bool;
+
+    #[doc(hidden)]
+    /// Hacky specialization.
+    /// 
+    /// This allows [`super::Simulator::open_io`]'s signature to just require an [`IODevice`]
+    /// and does not require that we expose IO internals.
+    fn _to_sim_io(self, _: internals::ToSimIOToken) -> internals::SimIOKind
+        where Self: Sized
+    {
+        internals::SimIOKind::Custom(Box::new(self))
+    }
 }
 impl dyn IODevice {} // assert IODevice is dyn safe
 
@@ -49,6 +61,12 @@ impl IODevice for EmptyIO {
 
     fn io_write(&mut self, _addr: u16, _data: u16) -> bool {
         false
+    }
+    
+    fn _to_sim_io(self, _: internals::ToSimIOToken) -> internals::SimIOKind
+        where Self: Sized
+    {
+        internals::SimIOKind::Empty
     }
 }
 
@@ -137,6 +155,12 @@ impl IODevice for BufferedIO {
             },
             _ => false
         }
+    }
+    
+    fn _to_sim_io(self, _: internals::ToSimIOToken) -> internals::SimIOKind 
+        where Self: Sized
+    {
+        internals::SimIOKind::Buffered(self)
     }
 }
 
@@ -245,6 +269,12 @@ impl IODevice for BiChannelIO {
             _ => false
         }
     }
+    
+    fn _to_sim_io(self, _: internals::ToSimIOToken) -> internals::SimIOKind 
+        where Self: Sized
+    {
+        internals::SimIOKind::BiChannel(self)
+    }
 }
 /// Converts boolean data to a register word
 fn io_bool(b: bool) -> u16 {
@@ -254,39 +284,18 @@ fn io_bool(b: bool) -> u16 {
     }
 }
 
-/// An opaque box that holds custom defined IO.
-/// 
-/// This can be used to use a different implementation of IO
-/// than the ones implemented in this module.
-pub struct CustomIO(Box<dyn IODevice + Send + Sync>);
-impl CustomIO {
-    /// Creates a new custom IO.
-    pub fn new(device: impl IODevice + Send + Sync + 'static) -> Self {
-        CustomIO(Box::new(device))
-    }
-}
-impl IODevice for CustomIO {
-    fn io_read(&mut self, addr: u16) -> Option<u16> {
-        self.0.io_read(addr)
-    }
-
-    fn io_write(&mut self, addr: u16, data: u16) -> bool {
-        self.0.io_write(addr, data)
-    }
-}
-
 /// An IO device that handles MCR read/writes 
-/// and delegates the rest to the inner IO device.
+/// and delegates the rest to the inner SimIOKind.
 /// 
 /// This isn't exposed publicly because public users 
 /// can't really do much with it, since its use
 /// is hardcoded into the simulator.
 #[derive(Debug, Default)]
-pub(super) struct WithMCR<IO> {
-    pub inner: IO,
+pub(super) struct SimIO {
+    pub inner: internals::SimIOKind,
     pub mcr: Arc<AtomicBool>
 }
-impl<IO: IODevice> IODevice for WithMCR<IO> {
+impl IODevice for SimIO {
     fn io_read(&mut self, addr: u16) -> Option<u16> {
         match addr {
             MCR => Some(io_bool(self.mcr.load(Ordering::Relaxed))),
@@ -306,63 +315,53 @@ impl<IO: IODevice> IODevice for WithMCR<IO> {
     }
 }
 
-/// All the variants of IO accepted by the Simulator.
-#[derive(Default)]
-pub enum SimIO {
-    /// No IO. This corresponds to the implementation of [`EmptyIO`].
-    #[default]
-    Empty,
-    /// A buffered implementation. See [`BufferedIO`].
-    Buffered(BufferedIO),
-    /// A bi-channel IO implementation. See [`BiChannelIO`].
-    BiChannel(BiChannelIO),
-    /// A custom IO implementation. See [`CustomIO`].
-    Custom(CustomIO)
-}
-impl std::fmt::Debug for SimIO {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimIO")
-            .finish_non_exhaustive()
+pub(super) mod internals {
+    use super::{BiChannelIO, BufferedIO, EmptyIO, IODevice};
+
+    /// All the variants of IO accepted by the Simulator.
+    #[derive(Default)]
+    pub enum SimIOKind {
+        /// No IO. This corresponds to the implementation of [`EmptyIO`].
+        #[default]
+        Empty,
+        /// A buffered implementation. See [`BufferedIO`].
+        Buffered(BufferedIO),
+        /// A bi-channel IO implementation. See [`BiChannelIO`].
+        BiChannel(BiChannelIO),
+        /// A custom IO implementation.
+        Custom(Box<dyn IODevice + Send + Sync + 'static>)
     }
-}
-impl From<EmptyIO> for SimIO {
-    fn from(_value: EmptyIO) -> Self {
-        SimIO::Empty
+    impl std::fmt::Debug for SimIOKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("SimIO")
+                .finish_non_exhaustive()
+        }
     }
-}
-impl From<BufferedIO> for SimIO {
-    fn from(value: BufferedIO) -> Self {
-        SimIO::Buffered(value)
-    }
-}
-impl From<BiChannelIO> for SimIO {
-    fn from(value: BiChannelIO) -> Self {
-        SimIO::BiChannel(value)
-    }
-}
-impl From<CustomIO> for SimIO {
-    fn from(value: CustomIO) -> Self {
-        SimIO::Custom(value)
-    }
-}
-impl IODevice for SimIO {
-    fn io_read(&mut self, addr: u16) -> Option<u16> {
-        match self {
-            SimIO::Empty => EmptyIO.io_read(addr),
-            SimIO::Buffered(io) => io.io_read(addr),
-            SimIO::BiChannel(io) => io.io_read(addr),
-            SimIO::Custom(io) => io.io_read(addr),
+    impl IODevice for SimIOKind {
+        fn io_read(&mut self, addr: u16) -> Option<u16> {
+            match self {
+                SimIOKind::Empty => EmptyIO.io_read(addr),
+                SimIOKind::Buffered(io) => io.io_read(addr),
+                SimIOKind::BiChannel(io) => io.io_read(addr),
+                SimIOKind::Custom(io) => io.io_read(addr),
+            }
+        }
+    
+        fn io_write(&mut self, addr: u16, data: u16) -> bool {
+            match self {
+                SimIOKind::Empty => EmptyIO.io_write(addr, data),
+                SimIOKind::Buffered(io) => io.io_write(addr, data),
+                SimIOKind::BiChannel(io) => io.io_write(addr, data),
+                SimIOKind::Custom(io) => io.io_write(addr, data)
+            }
+        }
+        
+        fn _to_sim_io(self, _: ToSimIOToken) -> SimIOKind 
+            where Self: Sized
+        {
+            self
         }
     }
 
-    fn io_write(&mut self, addr: u16, data: u16) -> bool {
-        match self {
-            SimIO::Empty => EmptyIO.io_write(addr, data),
-            SimIO::Buffered(io) => io.io_write(addr, data),
-            SimIO::BiChannel(io) => io.io_write(addr, data),
-            SimIO::Custom(io) => io.io_write(addr, data)
-        }
-    }
+    pub struct ToSimIOToken(pub ());
 }
-
-pub(super) type SimIOwMCR = WithMCR<SimIO>;

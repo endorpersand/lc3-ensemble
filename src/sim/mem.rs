@@ -10,7 +10,7 @@ use rand::Rng;
 
 use crate::ast::Reg;
 
-use super::{IODevice, SimErr, SimIOwMCR};
+use super::{IODevice, SimErr, SimIO};
 
 /// A memory location that can be read and written to.
 /// 
@@ -450,7 +450,7 @@ const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 #[derive(Debug)]
 pub struct Mem {
     data: Box<[Word; N]>,
-    pub(super) io: SimIOwMCR
+    pub(super) io: SimIO
 }
 impl Mem {
     /// Creates a new memory with a provided word creation strategy.
