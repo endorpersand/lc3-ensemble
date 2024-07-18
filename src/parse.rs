@@ -430,7 +430,8 @@ pub mod simple {
 
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
-                Some(&Token::Reg(reg)) => Ok(Reg(reg)),
+                Some(&Token::Reg(reg_no)) => Reg::try_from(reg_no)
+                    .map_err(|_| ParseErr::new(format!("invalid register number {reg_no}"), span)),
                 _ => Err(ParseErr::new("expected register", span))
             }
         }

@@ -46,7 +46,7 @@
 //! use lc3_ensemble::parse::parse_ast;
 //! use lc3_ensemble::asm::assemble;
 //! use lc3_ensemble::sim::Simulator;
-//! use lc3_ensemble::ast::reg_consts::R0;
+//! use lc3_ensemble::ast::Reg::R0;
 //! 
 //! let src = "
 //!     .orig x3000
@@ -86,7 +86,7 @@
 //! Accessing can simply be done with [`Word::get`] and [`Word::set`]:
 //! ```
 //! use lc3_ensemble::sim::Simulator;
-//! use lc3_ensemble::ast::reg_consts::R0;
+//! use lc3_ensemble::ast::Reg::R0;
 //! 
 //! let mut sim = Simulator::new(Default::default());
 //! 
@@ -280,7 +280,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::asm::ObjectFile;
-use crate::ast::reg_consts::{R6, R7};
+use crate::ast::Reg::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 use debug::Breakpoint;

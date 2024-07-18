@@ -27,7 +27,7 @@
 //! use lc3_ensemble::asm::assemble;
 //! use lc3_ensemble::sim::Simulator;
 //! use lc3_ensemble::sim::frame::ParameterList;
-//! use lc3_ensemble::ast::reg_consts::R0;
+//! use lc3_ensemble::ast::Reg::R0;
 //! 
 //! let src = "
 //!     .orig x3000
@@ -100,7 +100,7 @@
 //! - a pass-by-register subroutine has to define an argument name and the associated register per argument:
 //! ```
 //! # use lc3_ensemble::sim::frame::ParameterList;
-//! # use lc3_ensemble::ast::reg_consts::*;
+//! # use lc3_ensemble::ast::Reg::*;
 //! // equivalent to fn(arg1: R0, arg2: R1) -> _
 //! let pl = ParameterList::with_pass_by_register(&[("arg1", R0), ("arg2", R1)], None);
 //! // equivalent to fn(arg1: R0, arg2: R1) -> R0
@@ -114,7 +114,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::reg_consts::{R0, R6};
+use crate::ast::Reg::{R0, R6};
 use crate::ast::Reg;
 
 use super::mem::{Mem, RegFile, Word};

@@ -140,28 +140,28 @@ impl SimInstr {
                 (off.get() as u16, 0..9)
             ]),
             SimInstr::ADD(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // ADD DR, SR1, imm5
-                (self.opcode(),   12..16),
-                (dr.0 as u16,     9..12),
-                (sr1.0 as u16,    6..9),
-                (0b1,             5..6),
-                (i2.get() as u16, 0..5)
+                (self.opcode(),       12..16),
+                (dr.reg_no() as u16,  9..12),
+                (sr1.reg_no() as u16, 6..9),
+                (0b1,                 5..6),
+                (i2.get() as u16,     0..5)
             ]),
             SimInstr::ADD(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // ADD DR, SR1, SR2
-                (self.opcode(), 12..16),
-                (dr.0 as u16,   9..12),
-                (sr1.0 as u16,  6..9),
-                (0b000,         3..6),
-                (r2.0 as u16,   0..3)
+                (self.opcode(),       12..16),
+                (dr.reg_no() as u16,  9..12),
+                (sr1.reg_no() as u16, 6..9),
+                (0b000,               3..6),
+                (r2.reg_no() as u16,  0..3)
             ]),
             SimInstr::LD(dr, off) => join_bits([
-                (self.opcode(),    12..16),
-                (dr.0 as u16,      9..12),
-                (off.get() as u16, 0..9)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (off.get() as u16,   0..9)
             ]),
             SimInstr::ST(sr, off) => join_bits([
-                (self.opcode(),    12..16),
-                (sr.0 as u16,      9..12),
-                (off.get() as u16, 0..9)
+                (self.opcode(),      12..16),
+                (sr.reg_no() as u16, 9..12),
+                (off.get() as u16,   0..9)
             ]),
             SimInstr::JSR(ImmOrReg::Imm(off)) => join_bits([ // JSR
                 (self.opcode(),    12..16),
@@ -169,67 +169,67 @@ impl SimInstr {
                 (off.get() as u16, 0..11)
             ]),
             SimInstr::JSR(ImmOrReg::Reg(br)) => join_bits([ // JSRR
-                (self.opcode(), 12..16),
-                (0b000,         9..12),
-                (br.0 as u16,   6..9),
-                (0b000_000,     0..6)
+                (self.opcode(),      12..16),
+                (0b000,              9..12),
+                (br.reg_no() as u16, 6..9),
+                (0b000_000,          0..6)
             ]),
             SimInstr::AND(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // AND DR, SR1, imm5
-                (self.opcode(),   12..16),
-                (dr.0 as u16,     9..12),
-                (sr1.0 as u16,    6..9),
-                (0b1,             5..6),
-                (i2.get() as u16, 0..5)
+                (self.opcode(),       12..16),
+                (dr.reg_no() as u16,  9..12),
+                (sr1.reg_no() as u16, 6..9),
+                (0b1,                 5..6),
+                (i2.get() as u16,     0..5)
             ]),
             SimInstr::AND(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // AND DR, SR1, SR2
-                (self.opcode(), 12..16),
-                (dr.0 as u16,   9..12),
-                (sr1.0 as u16,  6..9),
-                (0b000,         3..6),
-                (r2.0 as u16,   0..3)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16,  9..12),
+                (sr1.reg_no() as u16, 6..9),
+                (0b000,               3..6),
+                (r2.reg_no() as u16,  0..3)
             ]),
             SimInstr::LDR(dr, br, off) => join_bits([
-                (self.opcode(),    12..16),
-                (dr.0 as u16,      9..12),
-                (br.0 as u16,      6..9),
-                (off.get() as u16, 0..6)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (br.reg_no() as u16, 6..9),
+                (off.get() as u16,   0..6)
             ]),
             SimInstr::STR(dr, br, off) => join_bits([
-                (self.opcode(),    12..16),
-                (dr.0 as u16,      9..12),
-                (br.0 as u16,      6..9),
-                (off.get() as u16, 0..6)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (br.reg_no() as u16, 6..9),
+                (off.get() as u16,   0..6)
             ]),
             SimInstr::RTI => join_bits([
                 (self.opcode(),    12..16),
                 (0b0000_0000_0000, 0..12)
             ]),
             SimInstr::NOT(dr, sr) => join_bits([
-                (self.opcode(), 12..16),
-                (dr.0 as u16,   9..12),
-                (sr.0 as u16,   6..9),
-                (0b111_111,     0..6)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (sr.reg_no() as u16, 6..9),
+                (0b111_111,          0..6)
             ]),
             SimInstr::LDI(dr, off) => join_bits([
-                (self.opcode(),    12..16),
-                (dr.0 as u16,      9..12),
-                (off.get() as u16, 0..9)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (off.get() as u16,   0..9)
             ]),
             SimInstr::STI(sr, off) => join_bits([
-                (self.opcode(),    12..16),
-                (sr.0 as u16,      9..12),
-                (off.get() as u16, 0..9)
+                (self.opcode(),      12..16),
+                (sr.reg_no() as u16, 9..12),
+                (off.get() as u16,   0..9)
             ]),
             SimInstr::JMP(br) => join_bits([
-                (self.opcode(), 12..16),
-                (0b000,         9..12),
-                (br.0 as u16,   6..9),
-                (0b000_000,     0..6)
+                (self.opcode(),      12..16),
+                (0b000,              9..12),
+                (br.reg_no() as u16, 6..9),
+                (0b000_000,          0..6)
             ]),
             SimInstr::LEA(dr, off) => join_bits([
-                (self.opcode(),    12..16),
-                (dr.0 as u16,      9..12),
-                (off.get() as u16, 0..9)
+                (self.opcode(),      12..16),
+                (dr.reg_no() as u16, 9..12),
+                (off.get() as u16,   0..9)
             ]),
             SimInstr::TRAP(vect) => join_bits([
                 (self.opcode(), 12..16),
@@ -395,7 +395,7 @@ impl DecodeUtils for u16 {
 
 impl FromBits for Reg {
     fn from_bits(bits: u16) -> Self {
-        Reg(bits as u8)
+        Reg::try_from(bits as u8).unwrap()
     }
 }
 impl<const N: u32> FromBits for IOffset<N> {

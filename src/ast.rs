@@ -15,7 +15,7 @@ use offset_base::OffsetBacking;
 
 /// A register. Must be between 0 and 7.
 /// 
-/// This `Reg` struct can either be constructed by selecting a register from [`reg_consts`], 
+/// This `Reg` struct can either be constructed by accessing an enum variant, 
 /// or by using [`Reg::try_from`].
 /// 
 /// ## Examples
@@ -31,45 +31,40 @@ use offset_base::OffsetBacking;
 ///     ~~  ~~    
 /// ```
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct Reg(pub(crate) u8);
-
-/// Register constants!
-pub mod reg_consts {
-    use super::Reg;
-
+pub enum Reg {
     /// The 0th register in the register file.
-    pub const R0: Reg = Reg(0);
+    R0 = 0,
     /// The 1st register in the register file.
-    pub const R1: Reg = Reg(1);
+    R1 = 1,
     /// The 2nd register in the register file.
-    pub const R2: Reg = Reg(2);
+    R2 = 2,
     /// The 3rd register in the register file.
-    pub const R3: Reg = Reg(3);
+    R3 = 3,
     /// The 4th register in the register file.
-    pub const R4: Reg = Reg(4);
+    R4 = 4,
     /// The 5th register in the register file.
-    pub const R5: Reg = Reg(5);
+    R5 = 5,
     /// The 6th register in the register file.
-    pub const R6: Reg = Reg(6);
+    R6 = 6,
     /// The 7th register in the register file.
-    pub const R7: Reg = Reg(7);
+    R7 = 7
 }
 impl Reg {
     /// Gets the register number of this [`Reg`]. This is always between 0 and 7.
     pub fn reg_no(self) -> u8 {
-        self.0
+        self as u8
     }
 }
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // padding should have no effect here
-        write!(f, "R{}", self.0)
+        // formatting parameters should have no effect here
+        write!(f, "R{}", self.reg_no())
     }
 }
 impl From<Reg> for usize {
     // Used for indexing the reg file in [`ast::Sim`].
     fn from(value: Reg) -> Self {
-        usize::from(value.0)
+        usize::from(value.reg_no())
     }
 }
 impl TryFrom<u8> for Reg {
@@ -77,7 +72,14 @@ impl TryFrom<u8> for Reg {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0..=7 => Ok(Reg(value)),
+            0 => Ok(Reg::R0),
+            1 => Ok(Reg::R1),
+            2 => Ok(Reg::R2),
+            3 => Ok(Reg::R3),
+            4 => Ok(Reg::R4),
+            5 => Ok(Reg::R5),
+            6 => Ok(Reg::R6),
+            7 => Ok(Reg::R7),
             // HACKy, but there's no other way to create this error
             _     => u8::try_from(256).map(|_| unreachable!("should've been TryFromIntError")),
         }

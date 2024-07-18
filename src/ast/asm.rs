@@ -500,7 +500,7 @@ pub fn disassemble(data: &[u16]) -> Vec<Stmt> {
                         super::sim::SimInstr::NOT(dr, sr) => AsmInstr::NOT(dr, sr),
                         super::sim::SimInstr::LDI(dr, off) => AsmInstr::LDI(dr, PCOffset::Offset(off)),
                         super::sim::SimInstr::STI(sr, off) => AsmInstr::STI(sr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::JMP(super::reg_consts::R7) => AsmInstr::RET,
+                        super::sim::SimInstr::JMP(Reg::R7) => AsmInstr::RET,
                         super::sim::SimInstr::JMP(br) => AsmInstr::JMP(br),
                         super::sim::SimInstr::LEA(dr, off) => AsmInstr::LEA(dr, PCOffset::Offset(off)),
                         super::sim::SimInstr::TRAP(vect) if vect.get() == 0x20 => AsmInstr::GETC,

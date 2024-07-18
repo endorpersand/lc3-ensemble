@@ -620,14 +620,13 @@ impl Mem {
 
 /// The register file. 
 /// 
-/// This struct can be indexed with a [`Reg`] 
-/// (which can be constructed using the [`crate::ast::reg_consts`] module or via [`Reg::try_from`]).
+/// This struct can be indexed with a [`Reg`].
 /// 
 /// # Example
 /// 
 /// ```
 /// use lc3_ensemble::sim::mem::RegFile;
-/// use lc3_ensemble::ast::reg_consts::R0;
+/// use lc3_ensemble::ast::Reg::R0;
 /// 
 /// let mut reg = RegFile::new(&mut ()); // never should have to initialize a reg file
 /// reg[R0].set(11);
