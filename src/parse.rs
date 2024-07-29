@@ -324,76 +324,66 @@ pub mod simple {
             S::convert(imed, span)
         }
     }
+    trait DirectTokenParse: TokenParse<Intermediate = Self> {
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr>;
+    }
+    impl<T: DirectTokenParse> TokenParse for T {
+        type Intermediate = Self;
+    
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            DirectTokenParse::match_(m_token, span)
+        }
+    
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
+        }
+    }
 
     /// Comma.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct Comma;
-    impl TokenParse for Comma {
-        type Intermediate = Self;
-        
+    impl DirectTokenParse for Comma {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
             match m_token {
                 Some(Token::Comma) => Ok(Comma),
                 _ => Err(ParseErr::new("expected comma", span))
             }
         }
-        
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
-        }
     }
 
     /// Colon.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct Colon;
-    impl TokenParse for Colon {
-        type Intermediate = Self;
-
+    impl DirectTokenParse for Colon {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::Colon) => Ok(Colon),
                 _ => Err(ParseErr::new("expected colon", span))
             }
         }
-        
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
-        }
     }
 
     /// A string literal.
     #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct StrLiteral(pub String);
-    impl TokenParse for StrLiteral {
-        type Intermediate = Self;
-
+    impl DirectTokenParse for StrLiteral {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::String(s)) => Ok(StrLiteral(s.to_string())),
                 _ => Err(ParseErr::new("expected string literal", span))
             }
         }
-
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
-        }
     }
 
     /// The end of a line or input.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct End;
-    impl TokenParse for End {
-        type Intermediate = Self;
-
+    impl DirectTokenParse for End {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 None | Some(Token::NewLine) => Ok(End),
                 _ => Err(ParseErr::new("expected end of line", span))
             }
-        }
-
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
         }
     }
 
@@ -427,19 +417,13 @@ pub mod simple {
         }
     }
 
-    impl TokenParse for Reg {
-        type Intermediate = Self;
-
+    impl DirectTokenParse for Reg {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(&Token::Reg(reg_no)) => Reg::try_from(reg_no)
                     .map_err(|_| ParseErr::new(format!("invalid register number {reg_no}"), span)),
                 _ => Err(ParseErr::new("expected register", span))
             }
-        }
-                
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
         }
     }
 
@@ -491,18 +475,12 @@ pub mod simple {
         }
     }
 
-    impl TokenParse for Label {
-        type Intermediate = Self;
-
+    impl DirectTokenParse for Label {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::Ident(Ident::Label(s))) => Ok(Label::new(s.to_string(), span)),
                 _ => Err(ParseErr::new("expected label", span))
             }
-        }
-
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
         }
     }
 }
