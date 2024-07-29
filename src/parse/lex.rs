@@ -71,6 +71,11 @@ pub enum Token {
     #[regex(r"\r?\n")]
     NewLine
 }
+impl Token {
+    pub(crate) fn is_whitespace(&self) -> bool {
+        matches!(self, Token::NewLine)
+    }
+}
 
 macro_rules! ident_enum {
     ($($instr:ident),+) => {

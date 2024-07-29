@@ -246,7 +246,9 @@ impl Parser {
 
     /// Checks whether the input for the parser is empty.
     pub fn is_empty(&self) -> bool {
-        self.tokens[self.index..].is_empty()
+        self.tokens[self.index..]
+            .iter()
+            .all(|(t, _)| t.is_whitespace())
     }
 }
 
