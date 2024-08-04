@@ -443,44 +443,54 @@ pub struct SimFlags {
     /// 
     /// Strict mode adds additional integrity checks to the simulator,
     /// such as verifying initialization state is normal for provided data.
+    /// 
+    /// By default, this flag is `false`.
     pub strict: bool,
 
     /// Whether to use the real HALT trap.
     /// 
     /// There are two implementations of HALT within `Simulator`:
     /// - **virtual HALT**: On execution of `HALT` or `TRAP x25`, the simulator is automatically
-    /// halted before executing any true TRAP routine.
+    ///     halted before executing any true TRAP routine.
     /// - **real HALT**: On execution of `HALT` or `TRAP x25`, the TRAP routine for HALT
-    /// implemented in the OS is run and executed as usual.
+    ///     implemented in the OS is run and executed as usual.
     /// 
     /// Real HALT is useful for maintaining integrity to the LC-3 ISA, whereas
     /// virtual HALT preserves the state of the machine prior to calling the OS's HALT routine.
+    /// 
+    /// By default, this flag is `false`.
     pub use_real_halt: bool,
     
     /// The creation strategy for uninitialized Words.
     /// 
     /// This is used to initialize the `mem` and `reg_file` fields.
+    /// 
+    /// By default, this flag is [`MachineInitStrategy::default`].
     pub machine_init: MachineInitStrategy,
 
     /// Whether to store debugging information about call frames.
     /// 
     /// This flag only goes into effect after a `Simulator::new` or `Simulator::reset` call.
-    pub debug_frames: bool
-}
-impl Default for SimFlags {
-    /// The default flags.
     /// 
-    /// They are defined as follows:
-    /// - `strict`: false
-    /// - `use_real_halt`: false
-    /// - `machine_init`: default [`MachineInitStrategy`]
-    /// - `debug_frames`: false
+    /// By default, this flag is `false`.
+    pub debug_frames: bool,
+
+    /// If true, privilege checks are ignored and the simulator runs as though
+    /// the executor has supervisor level privilege.
+    /// 
+    /// By default, this flag is `false`.
+    pub ignore_privilege: bool
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for SimFlags {
     fn default() -> Self {
         Self {
             strict: false,
             use_real_halt: false,
             machine_init: Default::default(),
-            debug_frames: false
+            debug_frames: false,
+            ignore_privilege: false
         }
     }
 }
@@ -794,7 +804,7 @@ impl Simulator {
     /// Computes the default memory access context, 
     /// which are the default flags to use (see [`Mem::read`] and [`Mem::write`]).
     pub fn default_mem_ctx(&self) -> MemAccessCtx {
-        MemAccessCtx { privileged: self.psr.privileged(), strict: self.flags.strict }
+        MemAccessCtx { privileged: self.psr.privileged() || self.flags.ignore_privilege, strict: self.flags.strict }
     }
 
     /// Calls a subroutine.
@@ -1060,7 +1070,7 @@ impl Simulator {
                 self.mem.write(ea, val, write_ctx)?;
             },
             SimInstr::RTI => {
-                if self.psr.privileged() {
+                if self.psr.privileged() || self.flags.ignore_privilege {
                     let mctx = self.default_mem_ctx();
 
                     // Pop PC and PSR from the stack
