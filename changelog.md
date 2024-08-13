@@ -1,3 +1,10 @@
+# 0.6.0 (August 13, 2024)
+
+- Converted `Reg` into enum to better support niche optimizations
+- Deleted `crate::ast::reg_consts`
+- Fixed bug where program consisting only of new lines wouldn't assemble
+- Added `ignore_privilege` flag
+
 # 0.5.0 (June 29, 2024)
 
 - Added significantly more documentation and examples

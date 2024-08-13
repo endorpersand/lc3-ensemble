@@ -139,7 +139,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "clap",
- "lc3-ensemble 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lc3-ensemble 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -173,7 +173,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lc3-ensemble"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crossbeam-channel",
  "logos",
@@ -182,9 +182,9 @@ dependencies = [
 
 [[package]]
 name = "lc3-ensemble"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8e4f216f49f2dcb6f0257d83062c93fa4485a2f7557dc7c1ce75513afdc8f81"
+checksum = "0cabc37b94b9a1f9f53cd96453760c4bf11946ba03e7de7ce9218da8542e9da4"
 dependencies = [
  "crossbeam-channel",
  "logos",
