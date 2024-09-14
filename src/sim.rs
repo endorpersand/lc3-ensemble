@@ -26,11 +26,11 @@
 //! 
 //! Here, we define `simulator` to have the default flags. 
 //! We could also configure the simulator by editing the flags. For example,
-//! if we wish to enable real HALT, we can edit the flags like so:
+//! if we wish to enable real traps, we can edit the flags like so:
 //! 
 //! ```no_run
 //! # use lc3_ensemble::sim::{Simulator, SimFlags};
-//! let mut simulator = Simulator::new(SimFlags { use_real_halt: true, ..Default::default() });
+//! let mut simulator = Simulator::new(SimFlags { use_real_traps: true, ..Default::default() });
 //! ```
 //! 
 //! All of the available flags can be found in [`SimFlags`].
@@ -372,6 +372,30 @@ impl From<SimErr> for StepBreak {
     }
 }
 
+macro_rules! int_vect {
+    ($Type:ident, {$($name:ident = $value:literal), +}) => {
+        enum $Type {
+            $($name = $value),+
+        }
+        impl TryFrom<u16> for $Type {
+            type Error = ();
+
+            fn try_from(value: u16) -> Result<Self, Self::Error> {
+                match value {
+                    $($value => Ok(Self::$name)),+,
+                    _ => Err(())
+                }
+            }
+        }
+    }
+}
+int_vect!(RealIntVect, {
+    Halt = 0x25,
+    PrivilegeViolation = 0x100,
+    IllegalOpcode = 0x101,
+    AccessViolation = 0x102
+});
+
 /// An interrupt occurred.
 /// 
 /// See [`Simulator::add_external_interrupt`].
@@ -447,19 +471,26 @@ pub struct SimFlags {
     /// By default, this flag is `false`.
     pub strict: bool,
 
-    /// Whether to use the real HALT trap.
+    /// Whether to use emulated version of certain traps.
     /// 
-    /// There are two implementations of HALT within `Simulator`:
-    /// - **virtual HALT**: On execution of `HALT` or `TRAP x25`, the simulator is automatically
-    ///     halted before executing any true TRAP routine.
-    /// - **real HALT**: On execution of `HALT` or `TRAP x25`, the TRAP routine for HALT
-    ///     implemented in the OS is run and executed as usual.
+    /// Certain traps and exceptions have two separate implementations within `Simulator`, namely:
+    /// - `HALT` or `TRAP x25`
+    /// - Privilege mode exception
+    /// - Illegal opcode exception
+    /// - Access violation exception
     /// 
-    /// Real HALT is useful for maintaining integrity to the LC-3 ISA, whereas
-    /// virtual HALT preserves the state of the machine prior to calling the OS's HALT routine.
+    /// This flag allows us to configure between the two implementations:
+    /// - **virtual** (`false`): On execution of one of these interrupts, the simulator breaks
+    ///     and prints its own error.
+    /// - **real** (`true`): On execution of one of these interrupts, the simulator delegates
+    ///     the error to the machine's OS and continues through the OS.
+    /// 
+    /// Activating real traps is useful for maintaining integrity to the LC-3 ISA, whereas
+    /// virtual HALT preserves the state of the machine prior to calling the interrupt routines
+    /// and can provide slightly more helpful error messages.
     /// 
     /// By default, this flag is `false`.
-    pub use_real_halt: bool,
+    pub use_real_traps: bool,
     
     /// The creation strategy for uninitialized Words.
     /// 
@@ -487,7 +518,7 @@ impl Default for SimFlags {
     fn default() -> Self {
         Self {
             strict: false,
-            use_real_halt: false,
+            use_real_traps: false,
             machine_init: Default::default(),
             debug_frames: false,
             ignore_privilege: false
@@ -842,10 +873,24 @@ impl Simulator {
     fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), StepBreak> {
         if priority.is_some_and(|prio| prio <= self.psr.priority()) { return Ok(()) };
         
+        // Virtual traps.
+        // See the flag for documentation.
         // Virtual HALT
-        if !self.flags.use_real_halt && vect == 0x25 {
-            self.offset_pc(-1, false)?; // decrement PC so that execution goes back here
-            return Err(StepBreak::Halt)
+        if !self.flags.use_real_traps {
+            if let Ok(intv) = RealIntVect::try_from(vect) {
+                if !self.prefetch {
+                    // decrement PC so that if play is pressed again, it goes back here
+                    self.offset_pc(-1, false)?;
+                    self.prefetch = true;
+                }
+                let break_value = match intv {
+                    RealIntVect::Halt => StepBreak::Halt,
+                    RealIntVect::PrivilegeViolation => StepBreak::Err(SimErr::PrivilegeViolation),
+                    RealIntVect::IllegalOpcode => StepBreak::Err(SimErr::IllegalOpcode),
+                    RealIntVect::AccessViolation => StepBreak::Err(SimErr::AccessViolation),
+                };
+                return Err(break_value);
+            }
         };
         
         if !self.psr.privileged() {
@@ -867,6 +912,9 @@ impl Simulator {
         self.mem.write(sp.wrapping_sub(1), Word::new_init(old_psr), mctx)?;
         self.mem.write(sp.wrapping_sub(2), Word::new_init(old_pc), mctx)?;
         
+        // set PSR to z
+        self.psr.set_cc_z();
+
         // set interrupt priority
         if let Some(prio) = priority {
             self.psr.set_priority(prio);
@@ -971,11 +1019,10 @@ impl Simulator {
     
     /// Simulate one step, executing one instruction.
     /// 
-    /// This function is a library function and should be used when one step is needed.
-    /// The difference between this function and [`Simulator::step_in`] is that this
-    /// function can return [`SimErr::ProgramHalted`] as an error,
-    /// whereas `step_in` will ignore `ProgramHalted` errors.
-    fn step(&mut self) -> Result<(), StepBreak> {
+    /// Unlike [`Simulator::step`], this function does not handle the `use_real_traps` flag.
+    /// Both of these functions are not meant for general stepping use. That should be done
+    /// with [`Simulator::step_in`].
+    fn _step_inner(&mut self) -> Result<(), StepBreak> {
         self.prefetch = true;
 
         // Call all external interrupts:
@@ -985,6 +1032,7 @@ impl Simulator {
 
         let word = self.mem.read(self.pc, self.default_mem_ctx())?
             .get_if_init(self.flags.strict, SimErr::StrictPCCurrUninit)?;
+
         let instr = SimInstr::decode(word)?;
 
         self.offset_pc(1, false)?;
@@ -1147,6 +1195,27 @@ impl Simulator {
         Ok(())
     }
 
+    /// Simulate one step, executing one instruction.
+    ///
+    /// This function properly handles the `use_real_traps` flag.
+    /// 
+    /// This function is a library function and should be used when one step is needed.
+    /// The difference between this function and [`Simulator::step_in`] is that this
+    /// function can return [`StepBreak::Halt`] as an error,
+    /// whereas `step_in` will ignore that error.
+    fn step(&mut self) -> Result<(), StepBreak> {
+        match self._step_inner() {
+            // Virtual traps don't need to go through handle_interrupt logic
+            s if !self.flags.use_real_traps => s,
+            // Real traps!
+            Err(StepBreak::Halt) => self.handle_interrupt(RealIntVect::Halt as u16, None),
+            Err(StepBreak::Err(SimErr::PrivilegeViolation)) => self.handle_interrupt(RealIntVect::PrivilegeViolation as u16, None),
+            Err(StepBreak::Err(SimErr::IllegalOpcode)) => self.handle_interrupt(RealIntVect::IllegalOpcode as u16, None),
+            Err(StepBreak::Err(SimErr::InvalidInstrFormat)) => self.handle_interrupt(RealIntVect::IllegalOpcode as u16, None),
+            Err(StepBreak::Err(SimErr::AccessViolation)) => self.handle_interrupt(RealIntVect::AccessViolation as u16, None),
+            s => s
+        }
+    }
     /// Simulate one step, executing one instruction.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         match self.step() {

@@ -255,9 +255,9 @@
     .fill E_BAD_TRAP; x00FD
     .fill E_BAD_TRAP; x00FE
     .fill E_BAD_TRAP; x00FF
-    .fill E_BAD_INT; x0100
-    .fill E_BAD_INT; x0101
-    .fill E_BAD_INT; x0102
+    .fill E_EXC_PRIVL; x0100
+    .fill E_EXC_ILLOP; x0101
+    .fill E_EXC_ACV; x0102
     .fill E_BAD_INT; x0103
     .fill E_BAD_INT; x0104
     .fill E_BAD_INT; x0105
@@ -523,7 +523,7 @@
     E_BAD_INT:
         LEA R0, S_BAD_INT
         PUTS
-        HALT
+        RTI
     S_BAD_INT: .stringz "\n--- Missing interrupt handler ---"
 
     TRAP_GETC:
@@ -656,4 +656,20 @@
     DSR: .fill xFE04
     DDR: .fill xFE06
     MCR: .fill xFFFE
+
+    E_EXC_PRIVL:
+        LEA R0, S_EXC_PRIVL
+        PUTS
+        HALT
+        S_EXC_PRIVL: .stringz "\n--- Privilege violation ---"
+    E_EXC_ILLOP:
+        LEA R0, S_EXC_ILLOP
+        PUTS
+        HALT
+        S_EXC_ILLOP: .stringz "\n--- Illegal opcode ---"
+    E_EXC_ACV:
+        LEA R0, S_EXC_ACV
+        PUTS
+        HALT
+        S_EXC_ACV: .stringz "\n--- Access violation ---"
 .end
