@@ -591,7 +591,7 @@ pub struct Simulator {
     /// If unset, the program stops.
     /// 
     /// This is publicly accessible via a reference through [`Simulator::mcr`].
-    mcr: Arc<AtomicBool>,
+    mcr: MCR,
 
     /// Configuration settings for the simulator.
     /// 
@@ -618,7 +618,7 @@ impl Simulator {
     /// and with the OS loaded, but without a loaded object file.
     /// 
     /// This also allows providing an MCR atomic which is used by the Simulator.
-    fn new_with_mcr(flags: SimFlags, mcr: Arc<AtomicBool>) -> Self {
+    fn new_with_mcr(flags: SimFlags, mcr: MCR) -> Self {
         let mut filler = flags.machine_init.generator();
 
         let mut sim = Self {
@@ -761,7 +761,7 @@ impl Simulator {
     }
 
     /// Gets a reference to the MCR.
-    pub fn mcr(&self) -> &Arc<AtomicBool> {
+    pub fn mcr(&self) -> &MCR {
         // The mcr field is not exposed because that allows someone to swap the MCR
         // with another AtomicBool, which would cause the simulator's MCR
         // to be inconsistent with any other component's 
@@ -996,7 +996,7 @@ impl Simulator {
             }
         };
     
-        self.mcr.store(false, Ordering::Release);
+        self.mcr.store(false, Ordering::Relaxed);
         self.pause_condition = result?;
         Ok(())
     }
@@ -1363,3 +1363,6 @@ impl std::fmt::Debug for PSR {
             .finish()
     }
 }
+
+/// A type alias for MCR.
+pub type MCR = Arc<AtomicBool>;

@@ -12,10 +12,12 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, RwLockWriteGuard, TryLockError};
 
 use crossbeam_channel as cbc;
+
+use super::MCR;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
@@ -293,7 +295,7 @@ fn io_bool(b: bool) -> u16 {
 #[derive(Debug, Default)]
 pub(super) struct SimIO {
     pub inner: internals::SimIOKind,
-    pub mcr: Arc<AtomicBool>
+    pub mcr: MCR
 }
 impl IODevice for SimIO {
     fn io_read(&mut self, addr: u16) -> Option<u16> {
