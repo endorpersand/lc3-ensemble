@@ -94,28 +94,26 @@
 //! assert_eq!(sim.reg_file[R0].get(), 0x1234);
 //! ```
 //! 
-//! - If you wish to access the memory, [`Mem`] provides two pairs of memory access:
-//!     - [`Mem::read`] and [`Mem::write`] are used for accesses which should trigger access violations and IO.
-//!     - [`Mem::get_raw`] and [`Mem::get_raw_mut`] are used for accesses which directly access the memory.
+//! - If you wish to access the memory, the simulator provides two pairs of memory access:
+//!     - Direct access to the memory array (via the `mem`) field, which does not trigger access violations or IO.
+//!     - [`Simulator::read_mem`] and [`Simulator::write_mem`], which are used for accesses which do trigger access violations and IO.
 //! ```
 //! use lc3_ensemble::sim::Simulator;
 //! 
 //! let mut sim = Simulator::new(Default::default());
 //! 
 //! // Raw memory access:
-//! sim.mem.get_raw_mut(0x3000).set(0x5678);
-//! assert_eq!(sim.mem.get_raw(0x3000).get(), 0x5678);
+//! sim.mem[0x3000].set(0x5678);
+//! assert_eq!(sim.mem[0x3000].get(), 0x5678);
 //! 
 //! // Through read/write:
 //! use lc3_ensemble::sim::mem::Word;
 //! 
-//! assert!(sim.mem.write(0x0000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_err());
-//! assert!(sim.mem.write(0x3000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_ok());
-//! assert!(sim.mem.read(0x0000, sim.default_mem_ctx()).is_err());
-//! assert!(sim.mem.read(0x3000, sim.default_mem_ctx()).is_ok());
+//! assert!(sim.write_mem(0x0000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_err());
+//! assert!(sim.write_mem(0x3000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_ok());
+//! assert!(sim.read_mem(0x0000, sim.default_mem_ctx()).is_err());
+//! assert!(sim.read_mem(0x3000, sim.default_mem_ctx()).is_ok());
 //! ```
-//! 
-//! See more details in [`Mem`].
 //! 
 //! - Other state can be accessed. Consult the [`Simulator`] docs for more information.
 //! 
@@ -287,7 +285,7 @@ use debug::Breakpoint;
 use io::*;
 
 use self::frame::{FrameStack, FrameType};
-use self::mem::{Mem, MemAccessCtx, RegFile, Word, MachineInitStrategy};
+use self::mem::{MemArray, RegFile, Word, MachineInitStrategy};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -526,6 +524,24 @@ impl Default for SimFlags {
     }
 }
 
+const IO_START: u16 = 0xFE00;
+const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
+
+/// Context behind a memory access.
+/// 
+/// This struct is used by [`Simulator::read_mem`] and [`Simulator::write_mem`] to perform checks against memory accesses.
+/// A default memory access context for the given simulator can be constructed with [`Simulator::default_mem_ctx`].
+#[derive(Clone, Copy)]
+pub struct MemAccessCtx {
+    /// Whether this access is privileged (false = user, true = supervisor).
+    pub privileged: bool,
+    /// Whether writes to memory should follow strict rules 
+    /// (no writing partially or fully uninitialized data).
+    /// 
+    /// This does not affect [`Simulator::read_mem`].
+    pub strict: bool
+}
+
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
@@ -535,10 +551,13 @@ pub struct Simulator {
     /// The simulator's memory.
     /// 
     /// Note that this is held in the heap, as it is too large for the stack.
-    pub mem: Mem,
+    pub mem: MemArray,
 
     /// The simulator's register file.
     pub reg_file: RegFile,
+
+    /// The simulator's IO.
+    io: SimIO,
 
     /// The program counter.
     pub pc: u16,
@@ -622,8 +641,9 @@ impl Simulator {
         let mut filler = flags.machine_init.generator();
 
         let mut sim = Self {
-            mem: Mem::new(&mut filler),
+            mem: MemArray::new(&mut filler),
             reg_file: RegFile::new(&mut filler),
+            io: SimIO::default(),
             pc: 0x3000,
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
@@ -706,6 +726,55 @@ impl Simulator {
         self.mem.io.inner = io;
     }
     
+    /// Fallibly reads the word at the provided index, erroring if not possible.
+    /// 
+    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
+    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
+    /// 
+    /// The flags are used as follows:
+    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
+    /// - `strict`: not used for `read`
+    /// 
+    /// Note that this method is used for simulating a read to memory-mapped IO. 
+    /// If you would like to query the memory's state, consider using `index` on [`MemArray`].
+    pub fn read_mem(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
+
+        if addr >= IO_START {
+            if let Some(new_data) = self.io.io_read(addr) {
+                self.mem[addr].set(new_data);
+            }
+        }
+        Ok(self.mem[addr])
+    }
+
+    /// Fallibly writes the word at the provided index, erroring if not possible.
+    /// 
+    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
+    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
+    /// 
+    /// The flags are used as follows:
+    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
+    /// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error.
+    /// 
+    /// Note that this method is used for simulating a write to memory-mapped IO. 
+    /// If you would like to edit the memory's state, consider using `index_mut` on [`MemArray`].
+    pub fn write_mem(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
+        
+        let write_to_mem = if addr >= IO_START {
+            let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
+            self.io.io_write(addr, io_data)
+        } else {
+            true
+        };
+        if write_to_mem {
+            self.mem[addr]
+                .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
+        }
+        Ok(())
+    }
+
     /// Sets and initializes the IO handler.
     pub fn open_io<IO: IODevice>(&mut self, io: IO) {
         self.mem.io.inner = io._to_sim_io(io::internals::ToSimIOToken(()));
@@ -780,7 +849,7 @@ impl Simulator {
         let addr = addr_word.get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
         if self.flags.strict && st_check_mem {
             // Check next memory value is initialized:
-            if !self.mem.read(addr, self.default_mem_ctx())?.is_init() {
+            if !self.read_mem(addr, self.default_mem_ctx())?.is_init() {
                 return Err(SimErr::StrictPCNextUninit);
             }
         }
@@ -833,7 +902,7 @@ impl Simulator {
     }
 
     /// Computes the default memory access context, 
-    /// which are the default flags to use (see [`Mem::read`] and [`Mem::write`]).
+    /// which are the default flags to use (see [`Simulator::read_mem`] and [`Simulator::write_mem`]).
     pub fn default_mem_ctx(&self) -> MemAccessCtx {
         MemAccessCtx { privileged: self.psr.privileged() || self.flags.ignore_privilege, strict: self.flags.strict }
     }
@@ -856,7 +925,7 @@ impl Simulator {
     /// `0x00-0xFF` represents a trap,
     /// `0x100-0x1FF` represents an interrupt.
     fn call_interrupt(&mut self, vect: u16, ft: FrameType) -> Result<(), SimErr> {
-        let addr = self.mem.read(vect, self.default_mem_ctx())?
+        let addr = self.read_mem(vect, self.default_mem_ctx())?
             .get_if_init(self.flags.strict, SimErr::StrictSRAddrUninit)?;
 
         self.frame_stack.push_frame(self.prefetch_pc(), vect, ft, &self.reg_file, &self.mem);
@@ -909,8 +978,8 @@ impl Simulator {
             .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
 
         self.reg_file[R6] -= 2u16;
-        self.mem.write(sp.wrapping_sub(1), Word::new_init(old_psr), mctx)?;
-        self.mem.write(sp.wrapping_sub(2), Word::new_init(old_pc), mctx)?;
+        self.write_mem(sp.wrapping_sub(1), Word::new_init(old_psr), mctx)?;
+        self.write_mem(sp.wrapping_sub(2), Word::new_init(old_pc), mctx)?;
         
         // set PSR to z
         self.psr.set_cc_z();
@@ -1030,7 +1099,7 @@ impl Simulator {
             cb(self)?;
         }
 
-        let word = self.mem.read(self.pc, self.default_mem_ctx())?
+        let word = self.read_mem(self.pc, self.default_mem_ctx())?
             .get_if_init(self.flags.strict, SimErr::StrictPCCurrUninit)?;
 
         let instr = SimInstr::decode(word)?;
@@ -1059,7 +1128,7 @@ impl Simulator {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
-                let val = self.mem.read(ea, self.default_mem_ctx())?;
+                let val = self.read_mem(ea, self.default_mem_ctx())?;
                 self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
@@ -1071,7 +1140,7 @@ impl Simulator {
                 };
 
                 let val = self.reg_file[sr];
-                self.mem.write(ea, val, write_ctx)?;
+                self.write_mem(ea, val, write_ctx)?;
             },
             SimInstr::JSR(op) => {
                 // Note: JSRR R7 jumps to address at R7, then sets PC to R7.
@@ -1101,7 +1170,7 @@ impl Simulator {
                     .wrapping_add_signed(off.get());
                 let write_strict = self.flags.strict && br != R6 && !self.in_alloca(ea);
                 
-                let val = self.mem.read(ea, self.default_mem_ctx())?;
+                let val = self.read_mem(ea, self.default_mem_ctx())?;
                 self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
@@ -1115,7 +1184,7 @@ impl Simulator {
                 };
                 
                 let val = self.reg_file[sr];
-                self.mem.write(ea, val, write_ctx)?;
+                self.write_mem(ea, val, write_ctx)?;
             },
             SimInstr::RTI => {
                 if self.psr.privileged() || self.flags.ignore_privilege {
@@ -1125,9 +1194,9 @@ impl Simulator {
                     let sp = self.reg_file[R6]
                         .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
 
-                    let pc = self.mem.read(sp, mctx)?
+                    let pc = self.read_mem(sp, mctx)?
                         .get_if_init(self.flags.strict, SimErr::StrictJmpAddrUninit)?;
-                    let psr = self.mem.read(sp.wrapping_add(1), mctx)?
+                    let psr = self.read_mem(sp.wrapping_add(1), mctx)?
                         .get_if_init(self.flags.strict, SimErr::StrictPSRSetUninit)?;
                     self.reg_file[R6] += 2u16;
 
@@ -1152,17 +1221,17 @@ impl Simulator {
             },
             SimInstr::LDI(dr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
-                let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
+                let ea = self.read_mem(shifted_pc, self.default_mem_ctx())?
                     .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_strict = self.flags.strict && !self.in_alloca(ea);
 
-                let val = self.mem.read(ea, self.default_mem_ctx())?;
+                let val = self.read_mem(ea, self.default_mem_ctx())?;
                 self.reg_file[dr].set_if_init(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STI(sr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
-                let ea = self.mem.read(shifted_pc, self.default_mem_ctx())?
+                let ea = self.read_mem(shifted_pc, self.default_mem_ctx())?
                     .get_if_init(self.flags.strict, SimErr::StrictMemAddrUninit)?;
                 let write_ctx = MemAccessCtx {
                     strict: self.flags.strict && !self.in_alloca(ea),
@@ -1170,7 +1239,7 @@ impl Simulator {
                 };
 
                 let val = self.reg_file[sr];
-                self.mem.write(ea, val, write_ctx)?;
+                self.write_mem(ea, val, write_ctx)?;
             },
             SimInstr::JMP(br) => {
                 let addr = self.reg_file[br];

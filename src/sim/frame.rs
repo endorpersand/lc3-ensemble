@@ -117,7 +117,7 @@ use std::collections::HashMap;
 use crate::ast::Reg::{R0, R6};
 use crate::ast::Reg;
 
-use super::mem::{Mem, RegFile, Word};
+use super::mem::{MemArray, RegFile, Word};
 
 
 /// A list of parameters, used to define the signature of a subroutine or trap.
@@ -176,12 +176,12 @@ impl ParameterList {
     }
 
     /// Compute the arguments of this parameter list.
-    fn get_arguments(&self, regs: &RegFile, mem: &Mem, fp: u16) -> Vec<Word> {
+    fn get_arguments(&self, regs: &RegFile, mem: &MemArray, fp: u16) -> Vec<Word> {
         match self {
             ParameterList::CallingConvention { params } => {
                 (0..params.len())
                     .map(|i| fp.wrapping_add(4).wrapping_add(i as u16))
-                    .map(|addr| *mem.get_raw(addr))
+                    .map(|addr| mem[addr])
                     .collect()
             },
             ParameterList::PassByRegister { params, ret: _ } => {
@@ -354,7 +354,7 @@ impl FrameStack {
     /// Note that the `callee` parameter depends on the type of frame:
     /// - For subroutines, the `callee` parameter represents the start of the subroutine.
     /// - For traps and interrupts, the `callee` parameter represents the vect (0x00-0xFF for traps, 0x100-0x1FF for interrupts).
-    pub(super) fn push_frame(&mut self, caller: u16, callee: u16, frame_type: FrameType, regs: &RegFile, mem: &Mem) {
+    pub(super) fn push_frame(&mut self, caller: u16, callee: u16, frame_type: FrameType, regs: &RegFile, mem: &MemArray) {
         self.frame_no += 1;
         if let Some(frames) = self.frames.as_mut() {
             let m_plist = match frame_type {

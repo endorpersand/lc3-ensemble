@@ -2,15 +2,13 @@
 //! 
 //! This module consists of:
 //! - [`Word`]: A mutable memory location.
-//! - [`Mem`]: The memory.
+//! - [`MemArray`]: The memory array.
 //! - [`RegFile`]: The register file.
 
 use rand::rngs::StdRng;
 use rand::Rng;
 
 use crate::ast::Reg;
-
-use super::{IODevice, SimErr, SimIO};
 
 /// A memory location that can be read and written to.
 /// 
@@ -65,7 +63,7 @@ const ALL_BITS: u16 = 1u16.wrapping_neg();
 
 impl Word {
     /// Creates a new word that is considered uninitialized.
-    pub fn new_uninit(fill: &mut impl WordFiller) -> Self {
+    pub fn new_uninit<F: WordFiller + ?Sized>(fill: &mut F) -> Self {
         Self {
             data: fill.generate(),
             init: NO_BITS,
@@ -92,7 +90,7 @@ impl Word {
     /// This function is more cognizant of word initialization than [`Word::get`].
     /// - In non-strict mode (`strict == false`), this function unconditionally allows access to the data regardless of initialization state.
     /// - In strict mode (`strict == true`), this function verifies `self` is fully initialized, raising the provided error if not.
-    pub fn get_if_init(&self, strict: bool, err: SimErr) -> Result<u16, SimErr> {
+    pub fn get_if_init<E>(&self, strict: bool, err: E) -> Result<u16, E> {
         match !strict || self.is_init() {
             true  => Ok(self.data),
             false => Err(err)
@@ -115,7 +113,7 @@ impl Word {
     /// This function is more cognizant of word initialization than [`Word::set`].
     /// - In non-strict mode, this function preserves the initialization data of the `data` argument.
     /// - In strict mode, this function verifies `data` is fully initialized, raising the provided error if not.
-    pub fn set_if_init(&mut self, data: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
+    pub fn set_if_init<E>(&mut self, data: Word, strict: bool, err: E) -> Result<(), E> {
         match !strict || data.is_init() {
             true => {
                 *self = data;
@@ -298,8 +296,21 @@ impl std::ops::BitAndAssign for Word {
 /// 
 /// This is used with [`Word::new_uninit`] to create uninitialized Words.
 pub trait WordFiller {
-    /// Generate the data.
+    /// Generate a word of data.
     fn generate(&mut self) -> u16;
+
+    /// Generates an array of [`Word`]s.
+    fn generate_array<const N: usize>(&mut self) -> [Word; N] {
+        std::array::from_fn(|_| Word::new_uninit(self))
+    }
+    /// Generates a heap-allocated array of [`Word`]s.
+    fn generate_boxed_array<const N: usize>(&mut self) -> Box<[Word; N]> {
+        std::iter::repeat_with(|| Word::new_uninit(self))
+            .take(N)
+            .collect::<Box<_>>()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements"))
+    }
 }
 impl WordFiller for () {
     /// This creates unseeded, non-deterministic values.
@@ -374,100 +385,33 @@ impl WordFiller for WCGenerator {
     }
 }
 
-/// Context behind a memory access.
-/// 
-/// This struct is used by [`Mem::read`] and [`Mem::write`] to perform checks against memory accesses.
-/// A default memory access context for the given simulator can be constructed with [`Simulator::default_mem_ctx`].
-/// 
-/// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
-#[derive(Clone, Copy)]
-pub struct MemAccessCtx {
-    /// Whether this access is privileged (false = user, true = supervisor).
-    pub privileged: bool,
-    /// Whether writes to memory should follow strict rules 
-    /// (no writing partially or fully uninitialized data).
-    /// 
-    /// 
-    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
-    /// This does not affect [`Mem::read`].
-    pub strict: bool
-}
-
-const N: usize = 1 << 16;
-const IO_START: u16 = 0xFE00;
-const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
-
-/// Memory. 
+/// Memory array.
 /// 
 /// This can be addressed with any `u16` (16-bit address).
 /// 
-/// Note that this struct provides two methods of accessing memory:
-/// - [`Mem::get_raw`] and [`Mem::get_raw_mut`]: direct access to memory values
-/// - [`Mem::read`] and [`Mem::write`]: memory access with privilege checks, strictness checks, and IO updating
+/// This memory array *does* expose memory locations 0xFE00-0xFFFF,
+/// however they are not accessible through normal Simulator operation 
+/// (i.e., via [`Simulator::read_mem`]) and [`Simulator::write_mem`].
 /// 
-/// # `get_raw` and `get_raw_mut`
-/// 
-/// [`Mem::get_raw`] and [`Mem::get_raw_mut`]'s API is simple, it simply accesses the memory value at the address.
-/// Note that this means:
-/// - These functions do not trigger IO effects (and as a result, IO values will not be updated).
-/// - These functions do not perform access violation checks.
-/// 
-/// ```
-/// use lc3_ensemble::sim::mem::Mem;
-/// 
-/// let mut mem = Mem::new(&mut ()); // never should have to initialize mem
-/// mem.get_raw_mut(0x3000).set(11);
-/// assert_eq!(mem.get_raw(0x3000).get(), 11);
-/// ```
-/// 
-/// # `read` and `write`
-/// 
-/// In contrast, [`Mem::read`] and [`Mem::write`] have to account for all of the possible conditions 
-/// behind a memory access.
-/// This means:
-/// - These functions *do* trigger IO effects.
-/// - These functions do perform access violation and strictness checks.
-/// 
-/// Additionally, these functions require a [`MemAccessCtx`], defining the configuration of the access, which consists of:
-/// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
-/// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error (writes only).
-/// 
-/// The [`Simulator`] defines [`Simulator::default_mem_ctx`] to produce this value automatically based on the simulator's state.
-/// ```
-/// use lc3_ensemble::sim::Simulator;
-/// use lc3_ensemble::sim::mem::Word;
-/// 
-/// let mut sim = Simulator::new(Default::default());
-/// 
-/// assert!(sim.mem.write(0x0000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_err());
-/// assert!(sim.mem.write(0x3000, Word::new_init(0x9ABC), sim.default_mem_ctx()).is_ok());
-/// assert!(sim.mem.read(0x0000, sim.default_mem_ctx()).is_err());
-/// assert!(sim.mem.read(0x3000, sim.default_mem_ctx()).is_ok());
-/// ```
+/// They can be read and edited via the typical Index traits.
+/// If you wish to see the handling of memory-mapped IO, see the above
+/// [`Simulator`] methods.
 /// 
 /// [`Simulator`]: super::Simulator
+/// [`Simulator::read_mem`]: super::Simulator::read_mem
+/// [`Simulator::write_mem`]: super::Simulator::write_mem
 /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
 #[derive(Debug)]
-pub struct Mem {
-    data: Box<[Word; N]>,
-    pub(super) io: SimIO
-}
-impl Mem {
+pub struct MemArray(Box<[Word; 1 << 16]>);
+impl MemArray {
     /// Creates a new memory with a provided word creation strategy.
     pub fn new(filler: &mut impl WordFiller) -> Self {
-        Self {
-            data: std::iter::repeat_with(|| Word::new_uninit(filler))
-                .take(N)
-                .collect::<Box<_>>()
-                .try_into()
-                .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements")),
-            io: Default::default()
-        }
+        Self(filler.generate_boxed_array())
     }
 
     /// Copies an object file block into this memory.
     pub(super) fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
-        let mem = &mut self.data;
+        let mem = &mut self.0;
 
         // chunk_by was added in Rust 1.77
         struct ChunkBy<'s, T, F>(&'s [T], F);
@@ -529,92 +473,17 @@ impl Mem {
             start = end;
         }
     }
+}
+impl std::ops::Index<u16> for MemArray {
+    type Output = Word;
 
-    /// Gets a reference to a word from the memory's current state.
-    /// 
-    /// This is **only** meant to be used to query the state of the memory,
-    /// not to simulate a read from memory.
-    /// 
-    /// Note the differences from [`Mem::read`]:
-    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
-    /// - This function does not require [`MemAccessCtx`].
-    /// - This function does not perform access violation checks.
-    /// 
-    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
-    /// [`Mem::read`] should be used instead.
-    pub fn get_raw(&self, addr: u16) -> &Word {
-        // Mem could implement Index<u16>, but it doesn't as a lint against using this function incorrectly.
-        &self.data[usize::from(addr)]
+    fn index(&self, index: u16) -> &Self::Output {
+        &self.0[index as usize]
     }
-    
-    /// Gets a mutable reference to a word from the memory's current state.
-    /// 
-    /// This is **only** meant to be used to query/edit the state of the memory,
-    /// not to simulate a write from memory.
-    /// 
-    /// Note the differences from [`Mem::write`]:
-    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
-    /// - This function does not require [`MemAccessCtx`].
-    /// - This function does not perform access violation checks or strict uninitialized memory checking.
-    /// 
-    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
-    /// [`Mem::write`] should be used instead.
-    pub fn get_raw_mut(&mut self, addr: u16) -> &mut Word {
-        // Mem could implement IndexMut<u16>, but it doesn't as a lint against using this function incorrectly.
-        &mut self.data[usize::from(addr)]
-    }
-
-    /// Fallibly reads the word at the provided index, erroring if not possible.
-    /// 
-    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
-    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
-    /// 
-    /// The flags are used as follows:
-    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
-    /// - `strict`: not used for `read`
-    /// 
-    /// Note that this method is used for simulating a read. If you would like to query the memory's state, 
-    /// consider [`Mem::get_raw`].
-    /// 
-    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
-    pub fn read(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
-
-        if addr >= IO_START {
-            if let Some(new_data) = self.io.io_read(addr) {
-                self.data[usize::from(addr)].set(new_data);
-            }
-        }
-        Ok(self.data[usize::from(addr)])
-    }
-
-    /// Fallibly writes the word at the provided index, erroring if not possible.
-    /// 
-    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
-    /// The simulator provides a default [`MemAccessCtx`] under [`Simulator::default_mem_ctx`].
-    /// 
-    /// The flags are used as follows:
-    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
-    /// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error.
-    /// 
-    /// Note that this method is used for simulating a write. If you would like to edit the memory's state, 
-    /// consider [`Mem::get_raw_mut`].
-    /// 
-    /// [`Simulator::default_mem_ctx`]: super::Simulator::default_mem_ctx
-    pub fn write(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
-        
-        let write_to_mem = if addr >= IO_START {
-            let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
-            self.io.io_write(addr, io_data)
-        } else {
-            true
-        };
-        if write_to_mem {
-            self.data[usize::from(addr)]
-                .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
-        }
-        Ok(())
+}
+impl std::ops::IndexMut<u16> for MemArray {
+    fn index_mut(&mut self, index: u16) -> &mut Self::Output {
+        &mut self.0[index as usize]
     }
 }
 
@@ -637,7 +506,7 @@ pub struct RegFile([Word; 8]);
 impl RegFile {
     /// Creates a register file with uninitialized data.
     pub fn new(filler: &mut impl WordFiller) -> Self {
-        Self(std::array::from_fn(|_| Word::new_uninit(filler)))
+        Self(filler.generate_array())
     }
 }
 impl std::ops::Index<Reg> for RegFile {

@@ -38,7 +38,7 @@ impl Breakpoint {
         match self {
             Breakpoint::PC(expected) => expected == &sim.pc,
             Breakpoint::Reg { reg, value: cmp } => cmp.check(sim.reg_file[*reg].get()),
-            Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem.get_raw(*addr).get()), // do not trigger IO devices
+            Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem[*addr].get()), // do not trigger IO devices
         }
     }
 
