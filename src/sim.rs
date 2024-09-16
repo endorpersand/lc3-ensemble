@@ -280,6 +280,7 @@ pub mod mem;
 pub mod debug;
 pub mod frame;
 pub mod device;
+mod observer;
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -579,6 +580,9 @@ pub struct Simulator {
     /// had paused.
     pause_condition: PauseCondition,
 
+    /// Tracks changes in simulator state.
+    pub observer: observer::ChangeObserver,
+
     /// Indicates whether the OS has been loaded.
     os_loaded: bool,
 
@@ -627,7 +631,9 @@ impl Simulator {
             instructions_run: 0,
             prefetch: false,
             pause_condition: Default::default(),
+            observer: Default::default(),
             os_loaded: false,
+
             mcr,
             flags,
             breakpoints: Default::default(),
@@ -776,6 +782,9 @@ impl Simulator {
 
         // Duplicate write in mem array:
         if success {
+            if self.mem[addr] != data {
+                self.observer.set_mem_changed(addr);
+            }
             self.mem[addr]
                 .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
@@ -1009,6 +1018,7 @@ impl Simulator {
     pub fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
+        self.observer.clear();
         std::mem::take(&mut self.pause_condition);
         self.mcr.store(true, Ordering::Relaxed);
 
@@ -1271,6 +1281,7 @@ impl Simulator {
     }
     /// Simulate one step, executing one instruction.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
+        self.observer.clear();
         match self.step() {
             Ok(()) => Ok(()),
             Err(StepBreak::Halt) => Ok(()),

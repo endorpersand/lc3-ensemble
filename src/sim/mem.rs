@@ -52,7 +52,7 @@ use crate::ast::Reg;
 /// it is created with the initialization bits set to fully uninitialized.
 /// The data associated with this `Word` is decided by the creation strategy 
 /// (see [`super::MachineInitStrategy`] for details).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Word {
     data: u16,
     init: u16
