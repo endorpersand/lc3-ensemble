@@ -470,57 +470,70 @@ impl std::fmt::Display for Stmt {
         self.nucleus.fmt(f)
     }
 }
-/**
- * Attempts to disassemble bytecode back into assembly instructions.
- */
+
+/// Attempts to disassemble a line of bytecode back into an assembly instruction,
+/// returning `None` if it cannot be disassembled.
+pub fn try_disassemble_line(word: u16) -> Option<Stmt> {
+    // All words before 0x0200 are NOPs with offsets.
+    let si = match word >= 0x0200 {
+        true  => super::sim::SimInstr::decode(word).ok(),
+        false => None,
+    }?;
+    
+    let ai = match si {
+        super::sim::SimInstr::BR(cc, off) => AsmInstr::BR(cc, PCOffset::Offset(off)),
+        super::sim::SimInstr::ADD(dr, sr1, sr2) => AsmInstr::ADD(dr, sr1, sr2),
+        super::sim::SimInstr::LD(dr, off) => AsmInstr::LD(dr, PCOffset::Offset(off)),
+        super::sim::SimInstr::ST(sr, off) => AsmInstr::ST(sr, PCOffset::Offset(off)),
+        super::sim::SimInstr::JSR(off) => match off {
+            ImmOrReg::Imm(imm) => AsmInstr::JSR(PCOffset::Offset(imm)),
+            ImmOrReg::Reg(reg) => AsmInstr::JSRR(reg),
+        },
+        super::sim::SimInstr::AND(dr, sr1, sr2) => AsmInstr::AND(dr, sr1, sr2),
+        super::sim::SimInstr::LDR(dr, br, off) => AsmInstr::LDR(dr, br, off),
+        super::sim::SimInstr::STR(sr, br, off) => AsmInstr::STR(sr, br, off),
+        super::sim::SimInstr::RTI   => AsmInstr::RTI,
+        super::sim::SimInstr::NOT(dr, sr) => AsmInstr::NOT(dr, sr),
+        super::sim::SimInstr::LDI(dr, off) => AsmInstr::LDI(dr, PCOffset::Offset(off)),
+        super::sim::SimInstr::STI(sr, off) => AsmInstr::STI(sr, PCOffset::Offset(off)),
+        super::sim::SimInstr::JMP(Reg::R7) => AsmInstr::RET,
+        super::sim::SimInstr::JMP(br) => AsmInstr::JMP(br),
+        super::sim::SimInstr::LEA(dr, off) => AsmInstr::LEA(dr, PCOffset::Offset(off)),
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x20 => AsmInstr::GETC,
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x21 => AsmInstr::PUTC,
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x22 => AsmInstr::PUTS,
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x23 => AsmInstr::IN,
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x24 => AsmInstr::PUTSP,
+        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x25 => AsmInstr::HALT,
+        super::sim::SimInstr::TRAP(vect) => AsmInstr::TRAP(vect),
+    };
+
+    Some(Stmt {
+        labels: vec![],
+        nucleus: StmtKind::Instr(ai),
+        span: 0..0
+    })
+}
+
+/// Attempts to disassemble a line of bytecode back into an assembly instruction,
+/// returning a `.fill` directive if not possible.
+pub fn disassemble_line(word: u16) -> Stmt {
+    try_disassemble_line(word)
+        .unwrap_or_else(|| {
+            let fill = Directive::Fill(PCOffset::Offset(super::Offset::new_trunc(word)));
+
+            Stmt {
+                labels: vec![],
+                nucleus: StmtKind::Directive(fill),
+                span: 0..0
+            }
+        })
+}
+
+/// Attempts to disassemble bytecode back into assembly instructions.
 pub fn disassemble(data: &[u16]) -> Vec<Stmt> {
     data.iter()
         .copied()
-        .map(|word| {
-            let msi = match word > 0x100 {
-                true  => super::sim::SimInstr::decode(word).ok(),
-                false => None,
-            };
-
-            let nucleus = match msi {
-                Some(si) => {
-                    let ai = match si {
-                        super::sim::SimInstr::BR(cc, off) => AsmInstr::BR(cc, PCOffset::Offset(off)),
-                        super::sim::SimInstr::ADD(dr, sr1, sr2) => AsmInstr::ADD(dr, sr1, sr2),
-                        super::sim::SimInstr::LD(dr, off) => AsmInstr::LD(dr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::ST(sr, off) => AsmInstr::ST(sr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::JSR(off) => match off {
-                            ImmOrReg::Imm(imm) => AsmInstr::JSR(PCOffset::Offset(imm)),
-                            ImmOrReg::Reg(reg) => AsmInstr::JSRR(reg),
-                        },
-                        super::sim::SimInstr::AND(dr, sr1, sr2) => AsmInstr::AND(dr, sr1, sr2),
-                        super::sim::SimInstr::LDR(dr, br, off) => AsmInstr::LDR(dr, br, off),
-                        super::sim::SimInstr::STR(sr, br, off) => AsmInstr::STR(sr, br, off),
-                        super::sim::SimInstr::RTI   => AsmInstr::RTI,
-                        super::sim::SimInstr::NOT(dr, sr) => AsmInstr::NOT(dr, sr),
-                        super::sim::SimInstr::LDI(dr, off) => AsmInstr::LDI(dr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::STI(sr, off) => AsmInstr::STI(sr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::JMP(Reg::R7) => AsmInstr::RET,
-                        super::sim::SimInstr::JMP(br) => AsmInstr::JMP(br),
-                        super::sim::SimInstr::LEA(dr, off) => AsmInstr::LEA(dr, PCOffset::Offset(off)),
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x20 => AsmInstr::GETC,
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x21 => AsmInstr::PUTC,
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x22 => AsmInstr::PUTS,
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x23 => AsmInstr::IN,
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x24 => AsmInstr::PUTSP,
-                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x25 => AsmInstr::HALT,
-                        super::sim::SimInstr::TRAP(vect) => AsmInstr::TRAP(vect),
-                    };
-
-                    StmtKind::Instr(ai)
-                },
-                None => {
-                    let fill = Directive::Fill(PCOffset::Offset(super::Offset::new_trunc(word)));
-                    StmtKind::Directive(fill)
-                },
-            };
-
-            Stmt { labels: vec![], nucleus, span: 0..0 }
-        })
+        .map(disassemble_line)
         .collect()
 }

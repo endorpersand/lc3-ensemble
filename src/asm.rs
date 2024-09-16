@@ -791,6 +791,11 @@ impl SymbolTable {
         self.label_map.iter()
             .map(|(label, &(addr, _))| (&**label, addr))
     }
+
+    /// Gets an iterable of the mapping from lines to addresses.
+    pub fn line_iter(&self) -> impl Iterator<Item=(usize, u16)> + '_ {
+        self.line_map.iter()
+    }
 }
 impl std::fmt::Debug for SymbolTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -954,6 +959,11 @@ impl ObjectFile {
             .map(|(&addr, block)| (addr, block.as_slice()))
     }
     
+    /// Gets an iterator over all of the memory locations defined in the object file.
+    pub fn addr_iter(&self) -> impl Iterator<Item=(u16, Option<u16>)> + '_ {
+        self.iter()
+            .flat_map(|(addr, block)| block.iter().enumerate().map(move |(i, &v)| (addr.wrapping_add(i as u16), v)))
+    }
     /// Gets the symbol table if it is present in the object file.
     pub fn symbol_table(&self) -> Option<&SymbolTable> {
         self.sym.as_ref()
