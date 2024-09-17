@@ -403,6 +403,29 @@ int_vect!(RealIntVect, {
     AccessViolation = 0x102
 });
 
+
+/// The OS object file with symbols.
+/// 
+/// Do not rely on this existing.
+#[doc(hidden)]
+#[allow(non_snake_case)]
+pub fn _os_obj_file() -> &'static ObjectFile {
+    // This is public because LC3Tools UI needs it;
+    // however, I don't think there's any particular other reason
+    // that a developer would need this, so it's #[doc(hidden)].
+    use crate::parse::parse_ast;
+    use crate::asm::assemble_debug;
+    use std::sync::OnceLock;
+
+    static OS_OBJ_FILE: OnceLock<ObjectFile> = OnceLock::new();
+    
+    OS_OBJ_FILE.get_or_init(|| {
+        let os_file = include_str!("os.asm");
+        let ast = parse_ast(os_file).unwrap();
+        assemble_debug(ast, os_file).unwrap()
+    })
+}
+
 /// Reason for why execution paused if it wasn't due to an error.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 enum PauseCondition {
@@ -662,24 +685,12 @@ impl Simulator {
     /// 
     /// To initialize the IO, use [`Simulator::open_io`].
     fn load_os(&mut self) {
-        use crate::parse::parse_ast;
-        use crate::asm::assemble;
-        use std::sync::OnceLock;
-
-        static OS_OBJ_FILE: OnceLock<ObjectFile> = OnceLock::new();
-        
         if !self.os_loaded {
-            let obj = OS_OBJ_FILE.get_or_init(|| {
-                let os_file = include_str!("os.asm");
-                let ast = parse_ast(os_file).unwrap();
-                assemble(ast).unwrap()
-            });
-    
-            self.load_obj_file(obj);
+            self.load_obj_file(_os_obj_file());
             self.os_loaded = true;
         }
     }
-    
+
     /// Resets the simulator.
     /// 
     /// This resets the state of the `Simulator` back to before any execution calls,
