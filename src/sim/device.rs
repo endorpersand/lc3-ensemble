@@ -11,6 +11,7 @@
 //! - [`NullDevice`]: Does nothing.
 //! - [`BufferedKeyboard`]: Keyboard device that reads off of an input buffer.
 //! - [`BufferedDisplay`]: Display device that writes to an output buffer.
+//! - [`TimerDevice`]: Timer that triggers an interrupt after a specified number of interrupts.
 
 mod keyboard;
 mod display;
@@ -19,6 +20,7 @@ mod timer;
 use super::IO_START;
 pub use keyboard::BufferedKeyboard;
 pub use display::BufferedDisplay;
+pub use timer::TimerDevice;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
@@ -229,7 +231,7 @@ impl Interrupt {
     /// 
     /// Note that the priority is truncated to 3 bits.
     pub fn vectored(vect: u8, priority: u8) -> Self {
-        Self { kind: InterruptKind::Vectored { vect, priority: priority & 0b111 } }
+        Self { kind: InterruptKind::Vectored { vect, priority: priority.clamp(0, 7) } }
     }
     /// Creates a new external interrupt (one not handled by the OS).
     /// 
