@@ -1,3 +1,29 @@
+# 0.7.0 (September 19, 2024)
+
+- Revised MMIO system (should be last time!)
+  - Allows IO to be modularized into separate devices
+  - Allows IO devices to also trigger interrupts
+  - Introduces timer interrupt device! (`device::TimerDevice`)
+- Expand `use_real_halt` to also handle exceptions (via the `x00`, `x01`, `x02` interrupt vectors)
+- Added more helpers to observe object file/symbol table state
+  - `ObjectFile::addr_iter`: Maps each address in the object file to its value (if not uninitialized)
+  - `SymbolTable::line_iter`: Maps each line defined in source to its corresponding address
+  - `ast::asm::disassemble_line` and `ast::asm::try_disassemble_line`: Disassembles a single instruction.
+- Added a simple memory observer API that tracks what memory addresses are written to during an execution.
+  - `observer::ChangeObserver::mem_changed`: Gets whether an address changed during an execution
+  - `observer::ChangeObserver::take_mem_changes`: Creates an ordered iterator of all memory address changes (and clears the observer)
+- **Breaking changes** (like, everything):
+  - IO related breaking changes
+    - `io` module -> `device` module
+    - `Simulator::open_io` and `Simulator::close_io` have been moved into `sim.device_handler` field (`device::DeviceHandler::add_device` and `device::DeviceHandler::remove_device`)
+    - `Simulator::add_external_interrupt` and `Simulator::clear_external_interrupt` are removed (use `device::InterruptFromFn` with `device::Interrupt::External`)
+    - `io::IODevice` -> `device::ExternalDevice`
+    - `io::BufferedIO` -> `device::BufferedKeyboard`, `device::BufferedDisplay`
+    - `io::BiChannelIO` removed with no current alternative
+  - `Simulator::use_real_halt` -> `Simulator::use_real_traps`
+  - `mem::Mem` -> `mem::MemArray`, `Simulator::read_mem`, `Simulator::write_mem`
+  - Removed `ensemble-cli`
+
 # 0.6.0 (August 13, 2024)
 
 - Converted `Reg` into enum to better support niche optimizations
