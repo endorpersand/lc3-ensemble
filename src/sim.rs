@@ -5,7 +5,7 @@
 //! This module consists of:
 //! - [`Simulator`]: The struct that simulates assembled code.
 //! - [`mem`]: The module handling memory relating to the registers.
-//! - [`io`]: The module handling simulator IO.
+//! - [`device`]: The module handling simulator IO, interrupts, and general handling of external devices.
 //! - [`debug`]: The module handling types of breakpoints for the simulator.
 //! - [`frame`]: The module handling the frame stack and call frame management.
 //! 
@@ -174,21 +174,24 @@
 //! assert_eq!(sim.pc, 0x3002);
 //! ```
 //! 
-//! ## IO
+//! ## IO, interrupts, and external devices
 //! 
-//! IO is handled by an [`IODevice`]. When a load or store to a memory-mapped address (0xFE00-0xFFFF) occurs,
-//! the IODevice is queried for that data.
+//! IO and interrupts are handled by "external devices" (the trait [`ExternalDevice`]).
 //! 
-//! The best IO for programmatic uses is [`BufferedIO`], which exposes the IO to [`Vec`] and [`VecDeque`] buffers
-//! that can be modified.
+//! These can be added by registering the device in the Simulator's device handler 
+//! ([`DeviceHandler::add_device`] of the `device_handler` field).
 //! 
-//! If you wish to use the standard I/O (i.e., `stdin`/`stdout`), [`BiChannelIO`] can be used.
+//! When a load or store to a memory-mapped address (0xFE00-0xFFFF) occurs,
+//! the device handler sends the corresponding load/store to the device for it to handle.
+//! 
+//! The best IO for programmatic uses is [`device::BufferedKeyboard`] and [`device::BufferedDisplay`],
+//! which exposes the IO to memory buffers that can be modified.
 //! 
 //! ```
 //! use lc3_ensemble::parse::parse_ast;
 //! use lc3_ensemble::asm::assemble;
 //! use lc3_ensemble::sim::Simulator;
-//! use lc3_ensemble::sim::io::BufferedIO;
+//! use lc3_ensemble::sim::device::{BufferedKeyboard, BufferedDisplay};
 //! use std::sync::Arc;
 //! 
 //! let src = "
@@ -207,17 +210,22 @@
 //! let mut sim = Simulator::new(Default::default());
 //! sim.load_obj_file(&obj_file);
 //! 
-//! let io = BufferedIO::new();
-//! let input = Arc::clone(io.get_input());
-//! let output = Arc::clone(io.get_output());
-//! sim.open_io(io);
+//! let input = BufferedKeyboard::default();
+//! let output = BufferedDisplay::default();
+//! sim.device_handler.set_keyboard(input.clone());
+//! sim.device_handler.set_display(output.clone());
 //! 
-//! input.write().unwrap().extend(b"Hello, World!\0");
+//! input.get_buffer().write().unwrap().extend(b"Hello, World!\0");
 //! sim.run().unwrap();
 //! 
-//! assert_eq!(&*input.read().unwrap(), b"");
-//! assert_eq!(&**output.read().unwrap(), b"Hello, World!\0");
+//! assert_eq!(&*input.get_buffer().read().unwrap(), b"");
+//! assert_eq!(&**output.get_buffer().read().unwrap(), b"Hello, World!\0");
 //! ```
+//! 
+//! These external devices also support interrupt-based IO.
+//! 
+//! If the [`device::BufferedKeyboard`] device is enabled, interrupts can be enabled by setting `KBSR[14]`.
+//! Once enabled, the keyboard can interrupt the simulator and run its interrupt service routine.
 //! 
 //! ## Strictness (experimental)
 //! 
@@ -269,9 +277,9 @@
 //! [`VecDeque`]: std::collections::VecDeque
 //! [`Breakpoint`]: self::debug::Breakpoint
 pub mod mem;
-pub mod io;
 pub mod debug;
 pub mod frame;
+pub mod device;
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -282,7 +290,7 @@ use crate::ast::Reg::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 use debug::Breakpoint;
-use io::*;
+use device::{DeviceHandler, ExternalDevice, ExternalInterrupt};
 
 use self::frame::{FrameStack, FrameType};
 use self::mem::{MemArray, RegFile, Word, MachineInitStrategy};
@@ -300,7 +308,7 @@ pub enum SimErr {
     /// A supervisor region was accessed in user mode.
     AccessViolation,
     /// Interrupt raised.
-    Interrupt(InterruptErr),
+    Interrupt(ExternalInterrupt),
     /// A register was loaded with a partially uninitialized value.
     /// 
     /// This will ignore loads from the stack (R6), because it is convention to push registers 
@@ -394,49 +402,6 @@ int_vect!(RealIntVect, {
     AccessViolation = 0x102
 });
 
-/// An interrupt occurred.
-/// 
-/// See [`Simulator::add_external_interrupt`].
-#[derive(Debug)]
-pub struct InterruptErr(Box<dyn std::error::Error + Send + Sync + 'static>);
-impl InterruptErr {
-    /// Creates a new [`InterruptErr`].
-    fn new(e: impl std::error::Error + Send + Sync + 'static) -> Self {
-        InterruptErr(Box::new(e))
-    }
-
-    /// Get the internal error from this interrupt.
-    /// 
-    /// This can be downcast by the typical methods on `dyn Error`.
-    pub fn into_inner(self) -> Box<dyn std::error::Error + Send + Sync + 'static> {
-        self.0
-    }
-}
-impl std::fmt::Display for InterruptErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl std::error::Error for InterruptErr {}
-impl From<InterruptErr> for SimErr {
-    fn from(value: InterruptErr) -> Self {
-        SimErr::Interrupt(value)
-    }
-}
-impl From<InterruptErr> for StepBreak {
-    fn from(value: InterruptErr) -> Self {
-        StepBreak::Err(value.into())
-    }
-}
-
-#[allow(clippy::type_complexity)]
-struct SimInterrupt(Box<dyn Fn(&Simulator) -> Result<(), InterruptErr> + Send + Sync + 'static>);
-impl std::fmt::Debug for SimInterrupt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimInterrupt").finish_non_exhaustive()
-    }
-}
-
 /// Reason for why execution paused if it wasn't due to an error.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 enum PauseCondition {
@@ -524,24 +489,41 @@ impl Default for SimFlags {
     }
 }
 
+const USER_START: u16 = 0x3000;
 const IO_START: u16 = 0xFE00;
-const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
+const PSR_ADDR: u16 = 0xFFFC;
+const MCR_ADDR: u16 = 0xFFFE;
 
 /// Context behind a memory access.
 /// 
 /// This struct is used by [`Simulator::read_mem`] and [`Simulator::write_mem`] to perform checks against memory accesses.
 /// A default memory access context for the given simulator can be constructed with [`Simulator::default_mem_ctx`].
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct MemAccessCtx {
     /// Whether this access is privileged (false = user, true = supervisor).
     pub privileged: bool,
+
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
     /// 
     /// This does not affect [`Simulator::read_mem`].
-    pub strict: bool
-}
+    pub strict: bool,
 
+    /// Whether a read to memory-mapped IO should cause side effects.
+    /// 
+    /// This can be set to false to observe the value of IO.
+    /// 
+    /// This does not affect [`Simulator::write_mem`].
+    pub io_effects: bool
+}
+impl MemAccessCtx {
+    /// Allows any access and allows access to (effectless) IO.
+    /// 
+    /// Useful for reading state.
+    pub fn omnipotent() -> Self {
+        MemAccessCtx { privileged: true, strict: false, io_effects: false }
+    }
+}
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
@@ -555,9 +537,6 @@ pub struct Simulator {
 
     /// The simulator's register file.
     pub reg_file: RegFile,
-
-    /// The simulator's IO.
-    io: SimIO,
 
     /// The program counter.
     pub pc: u16,
@@ -623,11 +602,8 @@ pub struct Simulator {
     /// Breakpoints for the simulator.
     pub breakpoints: HashSet<Breakpoint>,
 
-    /// Functions that are run every step that can pause execution of the `Simulator`.
-    /// 
-    /// When an [`InterruptErr`] is raised, the simulation will raise [`SimErr::Interrupt`],
-    /// which can be used to handle the resulting `InterruptErr`.
-    external_interrupts: Vec<SimInterrupt>,
+    /// All external devices connected to the system (IO and interrupting devices).
+    pub device_handler: DeviceHandler
 
 }
 impl Simulator where Simulator: Send + Sync {}
@@ -643,7 +619,6 @@ impl Simulator {
         let mut sim = Self {
             mem: MemArray::new(&mut filler),
             reg_file: RegFile::new(&mut filler),
-            io: SimIO::default(),
             pc: 0x3000,
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
@@ -656,9 +631,10 @@ impl Simulator {
             mcr,
             flags,
             breakpoints: Default::default(),
-            external_interrupts: vec![],
+            device_handler: Default::default()
         };
 
+        sim.mem.as_slice_mut()[IO_START as usize..].fill(Word::new_init(0)); // clear IO section
         sim.load_os();
         sim
     }
@@ -687,8 +663,6 @@ impl Simulator {
         static OS_OBJ_FILE: OnceLock<ObjectFile> = OnceLock::new();
         
         if !self.os_loaded {
-            self.mem.io.mcr = Arc::clone(&self.mcr); // load to allow HALT to function
-
             let obj = OS_OBJ_FILE.get_or_init(|| {
                 let os_file = include_str!("os.asm");
                 let ast = parse_ast(os_file).unwrap();
@@ -717,13 +691,12 @@ impl Simulator {
         let mcr = Arc::clone(&self.mcr);
         let flags = self.flags;
         let breakpoints = std::mem::take(&mut self.breakpoints);
-        let external_ints = std::mem::take(&mut self.external_interrupts);
-        let io = std::mem::take(&mut self.mem.io.inner);
+        let dev_handler = std::mem::take(&mut self.device_handler);
 
         *self = Simulator::new_with_mcr(flags, mcr);
         self.breakpoints = breakpoints;
-        self.external_interrupts = external_ints;
-        self.mem.io.inner = io;
+        self.device_handler = dev_handler;
+        self.device_handler.io_reset();
     }
     
     /// Fallibly reads the word at the provided index, erroring if not possible.
@@ -738,13 +711,27 @@ impl Simulator {
     /// Note that this method is used for simulating a read to memory-mapped IO. 
     /// If you would like to query the memory's state, consider using `index` on [`MemArray`].
     pub fn read_mem(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
+        use std::sync::atomic::Ordering;
 
-        if addr >= IO_START {
-            if let Some(new_data) = self.io.io_read(addr) {
-                self.mem[addr].set(new_data);
+        if !ctx.privileged && !(USER_START..IO_START).contains(&addr) { return Err(SimErr::AccessViolation) };
+
+        // Apply read to IO and write to mem array:
+        match addr {
+            // Supervisor range
+            0..USER_START => { /* Non-IO read */ },
+            // User range
+            USER_START..IO_START => { /* Non-IO read */ },
+            // IO range
+            PSR_ADDR => self.mem[addr].set(self.psr.get()),
+            MCR_ADDR => self.mem[addr].set(u16::from(self.mcr.load(Ordering::Relaxed)) << 15),
+            IO_START.. => {
+                if let Some(data) = self.device_handler.io_read(addr, ctx.io_effects) {
+                    self.mem[addr].set(data);
+                }
             }
         }
+
+        // Load from mem array:
         Ok(self.mem[addr])
     }
 
@@ -760,29 +747,40 @@ impl Simulator {
     /// Note that this method is used for simulating a write to memory-mapped IO. 
     /// If you would like to edit the memory's state, consider using `index_mut` on [`MemArray`].
     pub fn write_mem(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
+        use std::sync::atomic::Ordering;
+
+        if !ctx.privileged && !(USER_START..IO_START).contains(&addr) { return Err(SimErr::AccessViolation) };
         
-        let write_to_mem = if addr >= IO_START {
-            let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
-            self.io.io_write(addr, io_data)
-        } else {
-            true
+        // Apply write to IO:
+        let success = match addr {
+            // Supervisor range (non-IO write)
+            0..USER_START => true,
+            // User range (non-IO write)
+            USER_START..IO_START => true,
+            // IO range
+            PSR_ADDR => {
+                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
+                self.psr.set(io_data);
+                true
+            },
+            MCR_ADDR => {
+                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
+                self.mcr.store((io_data as i16) < 0, Ordering::Relaxed);
+                true
+            },
+            IO_START.. => {
+                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
+                self.device_handler.io_write(addr, io_data)
+            }
         };
-        if write_to_mem {
+
+        // Duplicate write in mem array:
+        if success {
             self.mem[addr]
                 .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
+
         Ok(())
-    }
-
-    /// Sets and initializes the IO handler.
-    pub fn open_io<IO: IODevice>(&mut self, io: IO) {
-        self.mem.io.inner = io._to_sim_io(io::internals::ToSimIOToken(()));
-    }
-
-    /// Closes the IO handler, waiting for it to close.
-    pub fn close_io(&mut self) {
-        self.open_io(EmptyIO) // the illusion of choice
     }
 
     /// Loads an object file into this simulator.
@@ -904,7 +902,11 @@ impl Simulator {
     /// Computes the default memory access context, 
     /// which are the default flags to use (see [`Simulator::read_mem`] and [`Simulator::write_mem`]).
     pub fn default_mem_ctx(&self) -> MemAccessCtx {
-        MemAccessCtx { privileged: self.psr.privileged() || self.flags.ignore_privilege, strict: self.flags.strict }
+        MemAccessCtx {
+            privileged: self.psr.privileged() || self.flags.ignore_privilege,
+            strict: self.flags.strict,
+            io_effects: true
+        }
     }
 
     /// Calls a subroutine.
@@ -967,7 +969,7 @@ impl Simulator {
         }
 
         // Push PSR, PC to supervisor stack
-        let old_psr = self.psr.0;
+        let old_psr = self.psr.get();
         let old_pc = self.pc;
         
         self.psr.set_privileged(true);
@@ -996,33 +998,6 @@ impl Simulator {
         
         self.call_interrupt(vect, ft)
             .map_err(Into::into)
-    }
-
-    /// Registers an "external interrupt" to the simulator which is run every step.
-    /// 
-    /// An "external interrupt" is a function that can pause execution of the `Simulator`,
-    /// which is not necessarily handled by the Simulator's OS.
-    /// 
-    /// When an error is raised by an external interrupt, the simulation will raise [`SimErr::Interrupt`],
-    /// which can be used to handle the resulting `InterruptErr`.
-    /// 
-    /// One example where this is used is in Python bindings. 
-    /// In that case, we want to be able to halt the Simulator on a `KeyboardInterrupt`.
-    /// However, by default, Python cannot signal to the Rust library that a `KeyboardInterrupt`
-    /// has occurred. Thus, we can add a signal handler as an external interrupt to allow the `KeyboardInterrupt`
-    /// to be handled properly.
-    pub fn add_external_interrupt<E, F>(&mut self, interrupt: F) 
-        where E: std::error::Error + Send + Sync + 'static,
-              F: Fn(&Self) -> Result<(), E> + Send + Sync + 'static
-    {
-        self.external_interrupts.push(SimInterrupt(Box::new({
-            move |this| interrupt(this).map_err(InterruptErr::new)
-        })))
-    }
-
-    /// Clears any external interrupts.
-    pub fn clear_external_interrupts(&mut self) {
-        self.external_interrupts.clear()
     }
 
     /// Runs until the tripwire condition returns false (or any of the typical breaks occur).
@@ -1094,9 +1069,18 @@ impl Simulator {
     fn _step_inner(&mut self) -> Result<(), StepBreak> {
         self.prefetch = true;
 
-        // Call all external interrupts:
-        for SimInterrupt(cb) in &self.external_interrupts {
-            cb(self)?;
+        if let Some(int) = self.device_handler.poll_interrupt() {
+            match int.kind {
+                // If priority passes, handle interrupt then skip FETCH:
+                device::InterruptKind::Vectored { vect, priority } if priority > self.psr().priority() => {
+                    return self.handle_interrupt(0x100 + u16::from(vect), Some(priority));
+                },
+                // If priority does not pass, move to FETCH:
+                device::InterruptKind::Vectored { .. } => Ok(()),
+
+                // External interrupt.
+                device::InterruptKind::External(int) => Err(StepBreak::Err(SimErr::Interrupt(int))),
+            }?;
         }
 
         let word = self.read_mem(self.pc, self.default_mem_ctx())?
@@ -1344,7 +1328,7 @@ impl Default for Simulator {
 /// Each of these are exposed as the [`PSR::privileged`], [`PSR::priority`], and [`PSR::cc`] values.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(transparent)]
-pub struct PSR(pub u16);
+pub struct PSR(u16);
 
 impl PSR {
     /// Creates a PSR with a default value (user mode, `z` condition code).
@@ -1378,20 +1362,36 @@ impl PSR {
     pub fn is_p(&self) -> bool {
         self.cc() & 0b001 != 0
     }
+
+    /// Gets the bit-representation of the PSR.
+    pub fn get(&self) -> u16 {
+        self.0
+    }
+    /// Sets the PSR to the provided data value.
+    pub fn set(&mut self, data: u16) {
+        const MASK: u16 = 0b1000_0111_0000_0111;
+        
+        self.0 = data & MASK;
+        self.set_cc((data & 0b111) as u8);
+    }
     /// Sets whether the simulator is in privileged mode.
     pub fn set_privileged(&mut self, privl: bool) {
         self.0 &= 0x7FFF;
-        self.0 |= (!privl as u16) << 15;
+        self.0 |= u16::from(!privl) << 15;
     }
     /// Sets the current interrupt priority of the simulator.
     pub fn set_priority(&mut self, prio: u8) {
         self.0 &= 0xF8FF;
-        self.0 |= ((prio & 0b111) as u16) << 8;
+        self.0 |= u16::from(prio & 0b111) << 8;
     }
     /// Sets the condition code of the simulator.
-    pub fn set_cc(&mut self, cc: u8) {
+    pub fn set_cc(&mut self, mut cc: u8) {
         self.0 &= 0xFFF8;
-        self.0 |= (cc & 0b111) as u16;
+
+        // Guard from invalid CC.
+        cc &= 0b111;
+        if cc.count_ones() != 1 { cc = 0b010 };
+        self.0 |= u16::from(cc);
     }
     /// Sets the condition code of the simulator to `n`.
     pub fn set_cc_n(&mut self) {

@@ -473,6 +473,10 @@ impl MemArray {
             start = end;
         }
     }
+
+    pub(super) fn as_slice_mut(&mut self) -> &mut [Word] {
+        &mut *self.0
+    }
 }
 impl std::ops::Index<u16> for MemArray {
     type Output = Word;
