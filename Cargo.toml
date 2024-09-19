@@ -1,4 +1,3 @@
-workspace = { members = ["ensemble-cli"] }
 [package]
 name = "lc3-ensemble"
 rust-version="1.70"
