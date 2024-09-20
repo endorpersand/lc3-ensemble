@@ -54,7 +54,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lc3-ensemble"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crossbeam-channel",
  "logos",

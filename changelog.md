@@ -1,3 +1,8 @@
+# 0.7.1 (September 20, 2024)
+
+- Added new SourceInfo APIs that allow constructing SourceInfo structs from source strings 
+  - `SourceInfo::new`, `SourceInfo::from(String)`
+
 # 0.7.0 (September 19, 2024)
 
 - Revised MMIO system (should be last time!)
