@@ -350,9 +350,29 @@ impl std::fmt::Debug for SourceInfo {
     }
 }
 impl SourceInfo {
+    /// Computes the source info from a given string.
+    pub fn new(src: &str) -> Self {
+        Self::from_string(src.to_string())
+    }
+    fn from_string(src: String) -> Self {
+        // Index where each new line appears.
+        let nl_indices: Vec<_> = src
+            .match_indices('\n')
+            .map(|(i, _)| i)
+            .collect();
+
+        Self { src, nl_indices }
+    }
+
     /// Returns the entire source.
     pub fn source(&self) -> &str {
         &self.src
+    }
+
+    /// Counts the number of lines in the source string.
+    pub fn count_lines(&self) -> usize {
+        // The first line, plus every line after (delimited by a new line)
+        self.nl_indices.len() + 1
     }
 
     /// Gets the character range for the provided line, including any whitespace.
@@ -402,19 +422,34 @@ impl SourceInfo {
         self.line_span(line).map(|r| &self.src[r])
     }
 
+    /// Gets the line number of the current position.
+    fn get_line(&self, index: usize) -> usize {
+        self.nl_indices.partition_point(|&start| start < index)
+    }
+
     /// Calculates the line and character number for a given character index.
     /// 
     /// If the index exceeds the length of the string,
     /// the line number is given as the last line and the character number
     /// is given as the number of characters after the start of the line.
     pub fn get_pos_pair(&self, index: usize) -> (usize, usize) {
-        let lno = self.nl_indices.partition_point(|&start| start < index);
+        let lno = self.get_line(index);
 
         let Range { start: lstart, .. } = self.raw_line_span(lno)
             .or_else(|| self.raw_line_span(self.nl_indices.len()))
             .unwrap_or(0..0);
         let cno = index - lstart;
         (lno, cno)
+    }
+}
+impl From<&'_ str> for SourceInfo {
+    fn from(value: &'_ str) -> Self {
+        Self::new(value)
+    }
+}
+impl From<String> for SourceInfo {
+    fn from(value: String) -> Self {
+        Self::from_string(value)
     }
 }
 
@@ -513,15 +548,10 @@ impl SymbolTable {
         }
 
         // Index where each new line appears.
-        let nl_indices: Vec<_> = src.unwrap_or("")
-            .match_indices('\n')
-            .map(|(i, _)| i)
-            .collect();
-
+        let src_info = src.map(SourceInfo::new);
         let mut lc: Option<Cursor> = None;
         let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
-        let mut lines = vec![];
-        lines.resize(nl_indices.len() + 1, None);
+        let mut lines = vec![None; src_info.as_ref().map_or(0, SourceInfo::count_lines) + 1];
 
         for stmt in stmts {
             // Add labels if they exist
@@ -566,10 +596,9 @@ impl SymbolTable {
                 // Debug symbol:
                 // Calculate which source code line is associated with the instruction the LC is currently pointing to
                 // and add the mapping from line to instruction address.
-                #[allow(clippy::collapsible_if)]
-                if src.is_some() {
+                if let Some(s) = &src_info {
                     if !matches!(stmt.nucleus, StmtKind::Directive(Directive::Orig(_) | Directive::End)) {
-                        let line_index = nl_indices.partition_point(|&start| start < stmt.span.start);
+                        let line_index = s.get_line(stmt.span.start);
                         lines[line_index].replace(cur.lc);
                     }
                 }
@@ -592,8 +621,7 @@ impl SymbolTable {
             .map(|(k, (addr, span))| (k, (addr, span.start))) // optimization
             .collect();
         let line_map = LineSymbolMap::new(lines);
-        let src_info = src.map(|s| SourceInfo { src: s.to_string(), nl_indices });
-        
+
         Ok(SymbolTable { label_map, line_map, src_info })
     }
 

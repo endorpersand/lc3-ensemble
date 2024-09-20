@@ -134,6 +134,7 @@ impl Default for TimerDevice {
     /// - Binds to interrupt vector `0x81`
     /// - Interrupt priority 4
     /// - Disabled
+    /// 
     /// (These are arbitrary.)
     fn default() -> Self {
         Self::new(None, 50..=50, 0x81, 0b100)
