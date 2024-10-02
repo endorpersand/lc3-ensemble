@@ -1,3 +1,7 @@
+# 0.7.2 (October 2, 2024)
+
+- Fixed bug where `.fill -32` (or any negative number) would error.
+
 # 0.7.1 (September 20, 2024)
 
 - Added new SourceInfo APIs that allow constructing SourceInfo structs from source strings 
