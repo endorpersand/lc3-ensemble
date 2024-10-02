@@ -20,7 +20,7 @@ use std::ops::Range;
 use logos::{Logos, Span};
 
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
-use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset};
+use crate::ast::{ImmOrReg, Offset, OffsetNewErr, PCOffset};
 use lex::{Ident, Token};
 use simple::*;
 
@@ -474,7 +474,34 @@ pub mod simple {
                 .map_err(|s| ParseErr::wrap(s, span))
         }
     }
-
+    impl TokenParse for u16 {
+        type Intermediate = u16;
+    
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            match m_token {
+                Some(&Token::Unsigned(n)) => Ok(n),
+                _ => Err(ParseErr::new("expected immediate value", span.clone()))
+            }
+        }
+    
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
+        }
+    }
+    impl TokenParse for i16 {
+        type Intermediate = i16;
+    
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            match m_token {
+                Some(&Token::Signed(n)) => Ok(n),
+                _ => Err(ParseErr::new("expected immediate value", span.clone()))
+            }
+        }
+    
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
+        }
+    }
     impl DirectTokenParse for Label {
         fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
@@ -624,10 +651,10 @@ impl Parse for Directive {
                 // Unlike other numeric operands, it can accept both unsigned and signed literals,
                 // so it cannot be parsed with PCOffset's parser and has to be handled differently.
                 let span = parser.cursor();
-                let operand = match parser.match_::<Either<_, Either<_, IOffset<16>>>>()? {
+                let operand = match parser.match_::<Either<_, Either<u16, i16>>>()? {
                     Some(Left(label))       => Ok(PCOffset::Label(label)),
-                    Some(Right(Left(off)))  => Ok(PCOffset::Offset(off)),
-                    Some(Right(Right(off))) => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
+                    Some(Right(Left(off)))  => Ok(PCOffset::Offset(Offset::new_trunc(off))),
+                    Some(Right(Right(off))) => Ok(PCOffset::Offset(Offset::new_trunc(off as u16))),
                     _ => Err(ParseErr::new("expected numeric or label", span))
                 }?;
 
