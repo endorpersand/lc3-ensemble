@@ -1166,3 +1166,228 @@ impl std::fmt::Debug for Addr {
         write!(f, "x{:04X}", self.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write;
+
+    use crate::asm::encoding::TextFormat;
+    use crate::asm::AsmErrKind;
+    use crate::parse::parse_ast;
+
+    use super::encoding::{BinaryFormat, ObjFileFormat};
+    use super::{assemble_debug, AsmErr, ObjectFile};
+
+    fn assemble_src(src: &str) -> Result<ObjectFile, AsmErr> {
+        let ast = parse_ast(src).unwrap();
+        assemble_debug(ast, src)
+    }
+    #[test]
+    fn test_region_overlap() {
+        // Two orig blocks, one after another
+        let src = "
+        .orig x3000
+            HALT
+            HALT
+            HALT
+            HALT
+        .end
+
+        .orig x3002
+            HALT
+        .end
+        ";
+
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::OverlappingBlocks);
+
+        // Two orig blocks, one before another
+        let src = "
+        .orig x3002
+            HALT
+        .end
+
+        .orig x3000
+            HALT
+            HALT
+            HALT
+            HALT
+        .end
+        ";
+
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::OverlappingBlocks);
+
+        // Two orig blocks, one empty
+        let src = "
+        .orig x3000
+            HALT
+            HALT
+            HALT
+            HALT
+        .end
+
+        .orig x3002
+        .end
+        ";
+        assemble_src(src).unwrap();
+
+        // Two orig blocks, one empty
+        let src = "
+        .orig x3002
+        .end
+
+        .orig x3000
+            HALT
+            HALT
+            HALT
+            HALT
+        .end
+        ";
+
+        assemble_src(src).unwrap();
+    }
+
+    #[test]
+    fn test_writing_into_io() {
+        // write empty blocks
+        let src = "
+            .orig xFE00
+            .end
+        ";
+        assemble_src(src).unwrap();
+
+        let src = "
+            .orig xFE02
+            .end
+        ";
+        assemble_src(src).unwrap();
+
+        // write actual block
+        let src = "
+            .orig xFE00
+                AND R0, R0, #0
+            .end
+        ";
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+    }
+
+    #[test]
+    fn test_big_blocks() {
+        // big BLKW
+        let src = "
+            .orig x3000
+            .blkw xFFFF
+            .end
+        ";
+
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::WrappingBlock);
+
+        // Bunch of .fill:
+        let mut src = String::from(".orig x0000\n");
+        for i in 0x0000..=0xFFFF {
+            writeln!(src, ".fill x{i:04X}").unwrap();
+        }
+        writeln!(src, ".end").unwrap();
+
+        let obj = assemble_src(&src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+
+        // perfectly aligns
+        let src = "
+            .orig xFFFF
+            .blkw 1
+            .end
+        ";
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+
+        // perfectly aligns 2
+        let src = "
+            .orig x3000
+            .blkw xD000
+            .end
+        ";
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+
+        // big BLKW
+        let src = "
+            .orig x3000
+            .blkw xFFFF
+            .blkw xFFFF
+            .blkw xFFFF
+            .end
+        ";
+        let obj = assemble_src(src);
+        assert_eq!(obj.unwrap_err().kind, AsmErrKind::WrappingBlock);
+
+        // perfectly aligns and then does schenanigans
+        let src = "
+            .orig x3000
+            LABEL1 .blkw xD000
+            .fill x0000
+            .fill x0001
+            LABEL2 .fill x0002
+            .fill x0003
+            .end
+        ";
+        // Should error. Don't really care which error.
+        assemble_src(src).unwrap_err();
+    }
+
+    #[test]
+    fn test_ser_deser() {
+        fn assert_obj_equal(deser: &mut ObjectFile, expected: &ObjectFile, m: &str) {
+            let ds = deser.sym.as_mut()
+                .and_then(|s| s.debug_symbols.as_mut())
+                .map(|s| &mut s.src_info.src)
+                .expect("deserialized object file has no source");
+            let es = expected.sym.as_ref()
+                .and_then(|s| s.debug_symbols.as_ref())
+                .map(|s| &s.src_info.src)
+                .expect("expected object file has no source");
+
+            let ll = ds.trim().lines().map(str::trim);
+            let rl = es.trim().lines().map(str::trim);
+            
+            assert!(ll.eq(rl), "lines should have matched");
+            
+            let mut buf = es.to_string();
+            std::mem::swap(ds, &mut buf);
+            assert_eq!(deser, expected, "{m}");
+
+            // Revert change
+            let ds = deser.sym.as_mut()
+                .and_then(|s| s.debug_symbols.as_mut())
+                .map(|s| &mut s.src_info.src)
+                .expect("deserialized object file has no source");
+            std::mem::swap(ds, &mut buf);
+
+        }
+
+        let src = "
+            .orig x3000
+                AND R0, R0, #0
+                ADD R0, R0, #15
+                MINUS_R0 NOT R1, R0
+                ADD R1, R1, #1
+                HALT
+            .end
+        ";
+
+        let obj = assemble_src(src).unwrap();
+        
+        // Binary format
+        let ser = BinaryFormat::serialize(&obj);
+        let mut de = BinaryFormat::deserialize(&ser).expect("binary encoding should've been parseable");
+        assert_obj_equal(&mut de, &obj, "binary encoding could not be roundtripped");
+
+        // Text format
+        let ser = TextFormat::serialize(&obj);
+        let mut de = TextFormat::deserialize(&ser).expect("text encoding should've been parseable");
+        assert_obj_equal(&mut de, &obj, "text encoding could not be roundtripped");
+    }
+}
