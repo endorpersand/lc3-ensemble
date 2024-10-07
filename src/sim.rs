@@ -809,7 +809,7 @@ impl Simulator {
 
         let mut alloca = vec![];
 
-        for (start, words) in obj.iter() {
+        for (start, words) in obj.block_iter() {
             self.mem.copy_obj_block(start, words);
 
             // add this block to alloca

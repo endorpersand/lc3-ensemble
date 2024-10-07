@@ -43,7 +43,7 @@ impl ObjectFile {
         // the source code (n bytes)
         
         let mut bytes = vec![];
-        for (&addr, data) in self.block_map.iter() {
+        for (addr, data) in self.block_iter() {
             bytes.push(0x00);
             bytes.extend(u16::to_le_bytes(addr));
             bytes.extend(u16::to_le_bytes(data.len() as u16));

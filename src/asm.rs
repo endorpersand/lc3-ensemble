@@ -51,7 +51,7 @@ use crate::err::ErrSpan;
 /// ```
 pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
     let sym = SymbolTable::new(&ast, None)?;
-    create_obj_file(ast, sym, false)
+    ObjectFile::new(ast, sym, false)
 }
 /// Assembles a assembly source code AST into an object file.
 /// 
@@ -80,77 +80,7 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
 /// ```
 pub fn assemble_debug(ast: Vec<Stmt>, src: &str) -> Result<ObjectFile, AsmErr> {
     let sym = SymbolTable::new(&ast, Some(src))?;
-    create_obj_file(ast, sym, true)
-}
-
-fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<ObjectFile, AsmErr> {
-    let mut block_map: BTreeMap<u16, ObjBlock> = BTreeMap::new();
-
-    // PASS 2
-    // Holding both the LC and currently writing block
-    let mut current: Option<(u16, ObjBlock)> = None;
-
-    for stmt in ast {
-        match stmt.nucleus {
-            StmtKind::Directive(Directive::Orig(off)) => {
-                debug_assert!(current.is_none());
-                
-                // Add new working block.
-                let addr = off.get();
-                current.replace((addr + 1, ObjBlock { start: addr, orig_span: stmt.span, words: vec![] }));
-            },
-            StmtKind::Directive(Directive::End) => {
-                // The current block is complete, so take it out and append it to the block map.
-                let Some((_, block)) = current.take() else {
-                    // unreachable (because pass 1 should've found it)
-                    return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span));
-                };
-
-                // only append if it's not empty:
-                if block.words.is_empty() { continue; }
-
-                // Look at previous block, check if there's any overlap between this block and the current one.
-                let prev_entry = block_map.range(..=block.start)
-                    .next_back()
-                    .or_else(|| block_map.last_key_value());
-                if let Some((_, prev_block)) = prev_entry {
-                    // check if this block overlaps with the previous block
-                    if (block.start.wrapping_sub(prev_block.start) as usize) < prev_block.words.len() {
-                        return Err(
-                            AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_block.orig_span.clone(), block.orig_span.clone()])
-                        );
-                    }
-                }
-
-                block_map.insert(block.start, block);
-            },
-            StmtKind::Directive(directive) => {
-                let Some((lc, block)) = &mut current else {
-                    return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
-                };
-
-                let wl = directive.word_len();
-                directive.write_directive(&sym, block)?;
-                *lc = lc.wrapping_add(wl);
-            },
-            StmtKind::Instr(instr) => {
-                let Some((lc, block)) = &mut current else {
-                    return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
-                };
-                let sim = instr.into_sim_instr(*lc, &sym)?;
-                block.push(sim.encode());
-                *lc = lc.wrapping_add(1);
-            },
-        }
-    }
-
-    let block_map = block_map.into_iter()
-        .map(|(start, ObjBlock { words, .. })| (start, words))
-        .collect();
-    Ok(ObjectFile {
-        block_map,
-        sym: debug.then_some(sym),
-    })
+    ObjectFile::new(ast, sym, true)
 }
 
 /// Kinds of errors that can occur from assembling given assembly code.
@@ -854,12 +784,12 @@ impl std::fmt::Debug for SymbolTable {
 
 /// Replaces a [`PCOffset`] value with an [`Offset`] value by calculating the offset from a given label
 /// (if this `PCOffset` represents a label).
-fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolTable) -> Result<IOffset<N>, AsmErr> {
+fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, pc: u16, sym: &SymbolTable) -> Result<IOffset<N>, AsmErr> {
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
             let Some(loc) = sym.lookup_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
-            IOffset::new(loc.wrapping_sub(lc) as i16)
+            IOffset::new(loc.wrapping_sub(pc) as i16)
                 .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
         },
     }
@@ -868,26 +798,30 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
 impl AsmInstr {
     /// Converts an ASM instruction into a simulator instruction ([`SimInstr`])
     /// by resolving offsets and erasing aliases.
-    pub fn into_sim_instr(self, lc: u16, sym: &SymbolTable) -> Result<SimInstr, AsmErr> {
+    /// 
+    /// Parameters:
+    /// - `pc`: PC increment
+    /// - `sym`: The symbol table
+    pub fn into_sim_instr(self, pc: u16, sym: &SymbolTable) -> Result<SimInstr, AsmErr> {
         match self {
             AsmInstr::ADD(dr, sr1, sr2) => Ok(SimInstr::ADD(dr, sr1, sr2)),
             AsmInstr::AND(dr, sr1, sr2) => Ok(SimInstr::AND(dr, sr1, sr2)),
-            AsmInstr::BR(cc, off)       => Ok(SimInstr::BR(cc, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::BR(cc, off)       => Ok(SimInstr::BR(cc, replace_pc_offset(off, pc, sym)?)),
             AsmInstr::JMP(br)           => Ok(SimInstr::JMP(br)),
-            AsmInstr::JSR(off)          => Ok(SimInstr::JSR(ImmOrReg::Imm(replace_pc_offset(off, lc, sym)?))),
+            AsmInstr::JSR(off)          => Ok(SimInstr::JSR(ImmOrReg::Imm(replace_pc_offset(off, pc, sym)?))),
             AsmInstr::JSRR(br)          => Ok(SimInstr::JSR(ImmOrReg::Reg(br))),
-            AsmInstr::LD(dr, off)       => Ok(SimInstr::LD(dr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::LDI(dr, off)      => Ok(SimInstr::LDI(dr, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::LD(dr, off)       => Ok(SimInstr::LD(dr, replace_pc_offset(off, pc, sym)?)),
+            AsmInstr::LDI(dr, off)      => Ok(SimInstr::LDI(dr, replace_pc_offset(off, pc, sym)?)),
             AsmInstr::LDR(dr, br, off)  => Ok(SimInstr::LDR(dr, br, off)),
-            AsmInstr::LEA(dr, off)      => Ok(SimInstr::LEA(dr, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::LEA(dr, off)      => Ok(SimInstr::LEA(dr, replace_pc_offset(off, pc, sym)?)),
             AsmInstr::NOT(dr, sr)       => Ok(SimInstr::NOT(dr, sr)),
             AsmInstr::RET               => Ok(SimInstr::JMP(Reg::R7)),
             AsmInstr::RTI               => Ok(SimInstr::RTI),
-            AsmInstr::ST(sr, off)       => Ok(SimInstr::ST(sr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::ST(sr, off)       => Ok(SimInstr::ST(sr, replace_pc_offset(off, pc, sym)?)),
+            AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, pc, sym)?)),
             AsmInstr::STR(sr, br, off)  => Ok(SimInstr::STR(sr, br, off)),
             AsmInstr::TRAP(vect)        => Ok(SimInstr::TRAP(vect)),
-            AsmInstr::NOP(off)          => Ok(SimInstr::BR(0b000, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::NOP(off)          => Ok(SimInstr::BR(0b000, replace_pc_offset(off, pc, sym)?)),
             AsmInstr::GETC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x20))),
             AsmInstr::OUT               => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
             AsmInstr::PUTC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
@@ -909,60 +843,6 @@ impl Directive {
             Directive::End        => 0,
         }
     }
-
-    /// Writes the assembly for the given directive into the provided object block.
-    /// 
-    /// This also returns the total number of memory locations written.
-    fn write_directive(self, labels: &SymbolTable, block: &mut ObjBlock) -> Result<(), AsmErr> {
-        match self {
-            Directive::Orig(_) => {},
-            Directive::Fill(pc_offset) => {
-                let off = match pc_offset {
-                    PCOffset::Offset(o) => o.get(),
-                    PCOffset::Label(l)  => {
-                        labels.lookup_label(&l.name)
-                            .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
-                    },
-                };
-
-                block.push(off);
-            },
-            Directive::Blkw(n) => block.shift(n.get()),
-            Directive::Stringz(n) => {
-                block.extend(n.bytes().map(u16::from));
-                block.push(0);
-            },
-            Directive::End => {},
-        }
-
-        Ok(())
-    }
-}
-
-/// A singular block which represents a singular region in an object file.
-struct ObjBlock {
-    /// Starting address of the block.
-    start: u16,
-    /// Span of the orig statement.
-    orig_span: Range<usize>,
-    /// The words in the block.
-    words: Vec<Option<u16>>
-}
-impl ObjBlock {
-    fn push(&mut self, data: u16) {
-        self.words.push(Some(data));
-    }
-    fn shift(&mut self, n: u16) {
-        self.words.extend({
-            std::iter::repeat(None)
-                .take(usize::from(n))
-        });
-    }
-}
-impl Extend<u16> for ObjBlock {
-    fn extend<T: IntoIterator<Item = u16>>(&mut self, iter: T) {
-        self.words.extend(iter.into_iter().map(Some));
-    }
 }
 
 /// An object file.
@@ -981,16 +861,144 @@ pub struct ObjectFile {
     sym: Option<SymbolTable>
 }
 impl ObjectFile {
+    /// Creates a new object file from an assembly AST and a symbol table.
+    fn new(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<Self, AsmErr> {
+        /// A singular block which represents a singular region in an object file.
+        struct ObjBlock {
+            /// Starting address of the block.
+            start: u16,
+            /// The words in the block.
+            words: Vec<Option<u16>>,
+            /// Span of the orig statement.
+            /// 
+            /// Used for error diagnostics in this function.
+            orig_span: Range<usize>,
+        }
+        impl ObjBlock {
+            fn push(&mut self, data: u16) {
+                self.words.push(Some(data));
+            }
+            fn shift(&mut self, n: u16) {
+                self.words.extend({
+                    std::iter::repeat(None)
+                        .take(usize::from(n))
+                });
+            }
+            /// Writes the assembly for the given directive into the provided object block.
+            fn write_directive(&mut self, directive: Directive, labels: &SymbolTable) -> Result<(), AsmErr> {
+                match directive {
+                    Directive::Orig(_) => {},
+                    Directive::Fill(pc_offset) => {
+                        let off = match pc_offset {
+                            PCOffset::Offset(o) => o.get(),
+                            PCOffset::Label(l)  => {
+                                labels.lookup_label(&l.name)
+                                    .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
+                            },
+                        };
+
+                        self.push(off);
+                    },
+                    Directive::Blkw(n) => self.shift(n.get()),
+                    Directive::Stringz(n) => {
+                        self.extend(n.bytes().map(u16::from));
+                        self.push(0);
+                    },
+                    Directive::End => {},
+                }
+
+                Ok(())
+            }
+        }
+
+        impl Extend<u16> for ObjBlock {
+            fn extend<T: IntoIterator<Item = u16>>(&mut self, iter: T) {
+                self.words.extend(iter.into_iter().map(Some));
+            }
+        }
+
+        let mut block_map: BTreeMap<u16, ObjBlock> = BTreeMap::new();
+
+        // PASS 2
+        // Holding both the LC and currently writing block
+        let mut current: Option<(u16, ObjBlock)> = None;
+
+        for stmt in ast {
+            match stmt.nucleus {
+                StmtKind::Directive(Directive::Orig(off)) => {
+                    debug_assert!(current.is_none());
+                    
+                    // Add new working block.
+                    let addr = off.get();
+                    current.replace((addr, ObjBlock { start: addr, orig_span: stmt.span, words: vec![] }));
+                },
+                StmtKind::Directive(Directive::End) => {
+                    // The current block is complete, so take it out and append it to the block map.
+                    let Some((_, block)) = current.take() else {
+                        // unreachable (because pass 1 should've found it)
+                        return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span));
+                    };
+
+                    // only append if it's not empty:
+                    if block.words.is_empty() { continue; }
+
+                    // Look at previous block, check if there's any overlap between this block and the current one.
+                    let prev_entry = block_map.range(..=block.start)
+                        .next_back()
+                        .or_else(|| block_map.last_key_value());
+                    if let Some((_, prev_block)) = prev_entry {
+                        // check if this block overlaps with the previous block
+                        if (block.start.wrapping_sub(prev_block.start) as usize) < prev_block.words.len() {
+                            return Err(
+                                AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_block.orig_span.clone(), block.orig_span.clone()])
+                            );
+                        }
+                    }
+
+                    block_map.insert(block.start, block);
+                },
+                StmtKind::Directive(directive) => {
+                    let Some((lc, block)) = &mut current else {
+                        return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
+                    };
+
+                    let wl = directive.word_len();
+                    block.write_directive(directive, &sym)?;
+                    *lc = lc.wrapping_add(wl);
+                },
+                StmtKind::Instr(instr) => {
+                    let Some((lc, block)) = &mut current else {
+                        return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
+                    };
+                    let sim = instr.into_sim_instr(lc.wrapping_add(1), &sym)?;
+                    block.push(sim.encode());
+                    *lc = lc.wrapping_add(1);
+                },
+            }
+        }
+
+        let block_map = block_map.into_iter()
+            .map(|(start, ObjBlock { words, .. })| (start, words))
+            .collect();
+        Ok(Self {
+            block_map,
+            sym: debug.then_some(sym),
+        })
+    }
     /// Get an iterator over all of the blocks of the object file.
-    pub(crate) fn iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
+    pub(crate) fn block_iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
         self.block_map.iter()
             .map(|(&addr, block)| (addr, block.as_slice()))
     }
     
     /// Gets an iterator over all of the memory locations defined in the object file.
     pub fn addr_iter(&self) -> impl Iterator<Item=(u16, Option<u16>)> + '_ {
-        self.iter()
-            .flat_map(|(addr, block)| block.iter().enumerate().map(move |(i, &v)| (addr.wrapping_add(i as u16), v)))
+        self.block_iter()
+            .flat_map(|(addr, block)| {
+                block.iter()
+                    .enumerate()
+                    .map(move |(i, &v)| (addr.wrapping_add(i as u16), v))
+            })
     }
     /// Gets the symbol table if it is present in the object file.
     pub fn symbol_table(&self) -> Option<&SymbolTable> {
