@@ -100,14 +100,16 @@ pub enum AsmErrKind {
     OverlappingOrig,
     /// There were multiple labels of the same name (pass 1).
     OverlappingLabels,
+    /// Block wraps memory (pass 2).
+    WrappingBlock,
+    /// Block writes to IO memory region (pass 2).
+    BlockInIO,
     /// There are blocks that overlap ranges of memory (pass 2).
     OverlappingBlocks,
     /// Creating the offset to replace a label caused overflow (pass 2).
     OffsetNewErr(OffsetNewErr),
     /// Label did not have an assigned address (pass 2).
     CouldNotFindLabel,
-    /// Block is way too large (pass 2).
-    ExcessiveBlock,
 }
 impl std::fmt::Display for AsmErrKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -118,10 +120,11 @@ impl std::fmt::Display for AsmErrKind {
             Self::UnopenedOrig      => f.write_str(".end does not have associated .orig"),
             Self::OverlappingOrig   => f.write_str("cannot have an .orig inside another region"),
             Self::OverlappingLabels => f.write_str("label was defined multiple times"),
+            Self::WrappingBlock     => f.write_str("block wraps around in memory"),
+            Self::BlockInIO         => f.write_str("cannot write code into memory-mapped IO region"),
             Self::OverlappingBlocks => f.write_str("regions overlap in memory"),
             Self::OffsetNewErr(e)   => e.fmt(f),
             Self::CouldNotFindLabel => f.write_str("label could not be found"),
-            Self::ExcessiveBlock    => write!(f, "block is larger than {} words", (1 << 16)),
         }
     }
 }
@@ -167,12 +170,15 @@ impl crate::err::Error for AsmErr {
             AsmErrKind::OverlappingOrig   => Some("try adding an .end directive at the end of the outer .orig block".into()),
             AsmErrKind::OverlappingLabels => Some("labels must be unique within a file, try renaming one of the labels".into()),
             AsmErrKind::OverlappingBlocks => Some("try moving the starting address of one of these regions".into()),
+            AsmErrKind::WrappingBlock     => Some("user code typically starts at x3000 and is short enough to not wrap memory".into()),
+            AsmErrKind::BlockInIO         => Some("try not doing that".into()),
             AsmErrKind::OffsetNewErr(e)   => e.help(),
-            AsmErrKind::CouldNotFindLabel => Some("try adding the label before an instruction or directive".into()),
-            AsmErrKind::ExcessiveBlock    => Some("try not doing that".into()),
+            AsmErrKind::CouldNotFindLabel => Some("try adding this label before an instruction or directive".into()),
         }
     }
 }
+
+const IO_START: u16 = 0xFE00;
 
 /// A mapping from line numbers to memory addresses (and vice-versa).
 ///
@@ -458,28 +464,44 @@ impl SymbolTable {
         struct Cursor {
             // The current location counter.
             lc: u16,
-            // The length of the current block being read.
-            block_len: u16,
+            // True if 0x10000.
+            overflowed: bool,
             // The span of the .orig directive.
             block_orig: Span,
         }
         impl Cursor {
+            fn new(lc: u16, block_orig: Span) -> Self {
+                Self { lc, overflowed: false, block_orig }
+            }
             /// Attempts to shift the LC forward by n word locations,
-            /// failing if that would overflow the size of the block.
-            /// 
-            /// This returns if it was successful.
-            fn shift(&mut self, n: u16) -> bool {
-                let Some(new_len) = self.block_len.checked_add(n) else { return false };
+            /// failing if that would cause the LC to pass the IO region or
+            /// overflow memory.
+            fn shift(&mut self, n: u16) -> Result<(), AsmErrKind> {
+                if n == 0 { return Ok(()); }
 
-                self.lc = self.lc.wrapping_add(n);
-                self.block_len = new_len;
-                true
+                match (self.overflowed, self.lc.checked_add(n)) {
+                    (true, _) => Err(AsmErrKind::WrappingBlock),
+                    (false, Some(new_lc)) if new_lc > IO_START => Err(AsmErrKind::BlockInIO),
+                    (false, Some(new_lc)) => {
+                        self.lc = new_lc;
+                        Ok(())
+                    },
+                    (false, None) => {
+                        let lc = std::mem::take(&mut self.lc);
+                        self.overflowed = true;
+                        // If aligns exactly, it can't be considered wrapping over
+                        Err(match lc == n.wrapping_neg() {
+                            true => AsmErrKind::BlockInIO,
+                            false => AsmErrKind::WrappingBlock,
+                        })
+                    }
+                }
             }
         }
 
         // Index where each new line appears.
         let src_info = src.map(SourceInfo::new);
-        let mut lc: Option<Cursor> = None;
+        let mut cursor: Option<Cursor> = None;
         let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
         let mut lines = vec![None; src_info.as_ref().map_or(0, SourceInfo::count_lines) + 1];
 
@@ -488,7 +510,7 @@ impl SymbolTable {
             if !stmt.labels.is_empty() {
                 // If cursor does not exist, that means we're not in an .orig block,
                 // so these labels don't have a known location
-                let Some(cur) = lc.as_ref() else {
+                let Some(cur) = cursor.as_ref() else {
                     let spans = stmt.labels.iter()
                         .map(|label| label.span())
                         .collect::<Vec<_>>();
@@ -510,19 +532,19 @@ impl SymbolTable {
 
             // Handle .orig, .end cases:
             match &stmt.nucleus {
-                StmtKind::Directive(Directive::Orig(addr)) => match lc {
+                StmtKind::Directive(Directive::Orig(addr)) => match cursor {
                     Some(cur) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, [cur.block_orig, stmt.span.clone()])),
-                    None      => { lc.replace(Cursor { lc: addr.get(), block_len: 0, block_orig: stmt.span.clone() }); },
+                    None      => { cursor.replace(Cursor::new(addr.get(), stmt.span.clone())); },
                 },
-                StmtKind::Directive(Directive::End) => match lc {
-                    Some(_) => { lc.take(); },
+                StmtKind::Directive(Directive::End) => match cursor {
+                    Some(_) => { cursor.take(); },
                     None    => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone())),
                 },
                 _ => {}
             };
 
             // If we're keeping track of the line counter currently (i.e., are inside of a .orig block):
-            if let Some(cur) = &mut lc {
+            if let Some(cur) = &mut cursor {
                 // Debug symbol:
                 // Calculate which source code line is associated with the instruction the LC is currently pointing to
                 // and add the mapping from line to instruction address.
@@ -534,16 +556,14 @@ impl SymbolTable {
                 }
 
                 // Shift the LC forward
-                let success = match &stmt.nucleus {
+                match &stmt.nucleus {
                     StmtKind::Instr(_)     => cur.shift(1),
                     StmtKind::Directive(d) => cur.shift(d.word_len()),
-                };
-
-                if !success { return Err(AsmErr::new(AsmErrKind::ExcessiveBlock, cur.block_orig.clone())) }
+                }.map_err(|e| AsmErr::new(e, stmt.span.clone()))?
             }
         }
 
-        if let Some(cur) = lc {
+        if let Some(cur) = cursor {
             return Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig));
         }
         
@@ -795,6 +815,18 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, pc: u16, sym: &SymbolT
     }
 }
 
+/// Checks if two ranges overlap.
+/// 
+/// This assumes (start <= end) for both ranges.
+fn ranges_overlap<T: Ord>(a: Range<T>, b: Range<T>) -> bool {
+    let Range { start: a_start, end: a_end } = a;
+    let Range { start: b_start, end: b_end } = b;
+
+    // Range not overlapping: a_start >= b_end || b_start >= a_end
+    // This is just the inverse.
+    a_start < b_end && b_start < a_end
+}
+
 impl AsmInstr {
     /// Converts an ASM instruction into a simulator instruction ([`SimInstr`])
     /// by resolving offsets and erasing aliases.
@@ -853,8 +885,11 @@ impl Directive {
 pub struct ObjectFile {
     /// A mapping of each block's address to its corresponding data.
     /// 
-    /// Note that the length of a block should fit in a `u16`, so the
-    /// block can be a maximum of 65535 words.
+    /// Invariants:
+    /// - The blocks are sorted in order.
+    /// - Blocks cannot wrap around in memory.
+    /// - Blocks cannot write into xFE00-xFFFF.
+    /// - As a corollary, block's length must fit in a `u16`.
     block_map: BTreeMap<u16, Vec<Option<u16>>>,
 
     /// Debug symbols.
@@ -872,9 +907,16 @@ impl ObjectFile {
             /// Span of the orig statement.
             /// 
             /// Used for error diagnostics in this function.
-            orig_span: Range<usize>,
+            orig_span: Range<usize>
         }
+
         impl ObjBlock {
+            fn range(&self) -> Range<u16> {
+                // Assumes no overflow and there cannot be more than u16::MAX words
+                // Both of these invariants are asserted by `push` and `try_extend`.
+                self.start .. (self.start + self.words.len() as u16)
+            }
+
             fn push(&mut self, data: u16) {
                 self.words.push(Some(data));
             }
@@ -942,17 +984,26 @@ impl ObjectFile {
                     // only append if it's not empty:
                     if block.words.is_empty() { continue; }
 
-                    // Look at previous block, check if there's any overlap between this block and the current one.
-                    let prev_entry = block_map.range(..=block.start)
-                        .next_back()
-                        .or_else(|| block_map.last_key_value());
-                    if let Some((_, prev_block)) = prev_entry {
-                        // check if this block overlaps with the previous block
-                        if (block.start.wrapping_sub(prev_block.start) as usize) < prev_block.words.len() {
-                            return Err(
-                                AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_block.orig_span.clone(), block.orig_span.clone()])
-                            );
-                        }
+                    // Check for overlap. Note this is probably overengineering:
+                    let m_overlapping = [
+                        block_map.range(..=block.start).next_back(), // previous block
+                        block_map.range(block.start..).next(), // next block
+                    ]
+                        .into_iter()
+                        .flatten()
+                        .find(|(_, b)| ranges_overlap(block.range(), b.range()));
+
+                    // If found overlapping block, raise error:
+                    if let Some((_, overlapping_block)) = m_overlapping {
+                        let span0 = block.orig_span;
+                        let span1 = overlapping_block.orig_span.clone();
+
+                        let order = match span0.start <= span1.start {
+                            true  => [span0, span1],
+                            false => [span1, span0],
+                        };
+
+                        return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, order));
                     }
 
                     block_map.insert(block.start, block);
