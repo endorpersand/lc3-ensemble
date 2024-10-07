@@ -199,6 +199,7 @@ const IO_START: u16 = 0xFE00;
 /// 9 | .end
 /// ```
 /// maps to `LineSymbolMap({1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]})`.
+#[derive(PartialEq, Eq)]
 struct LineSymbolMap(BTreeMap<usize, Vec<u16>>);
 
 impl LineSymbolMap {
@@ -271,6 +272,7 @@ impl std::fmt::Debug for LineSymbolMap {
 }
 /// Struct holding the source string and contains helpers 
 /// to index lines and to query position information from a source string.
+#[derive(PartialEq, Eq)]
 pub struct SourceInfo {
     /// The source code.
     src: String,
@@ -418,6 +420,7 @@ impl From<String> for SourceInfo {
 /// text is available during simulation time:
 /// - Mappings from source code line numbers to memory addresses
 /// - Source code text (which grants access to line contents from a given line number; see [`SourceInfo`] for more details)
+#[derive(PartialEq, Eq)]
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, (u16, usize)>,
@@ -880,7 +883,7 @@ impl Directive {
 /// 
 /// This is the final product after assembly source code is fully assembled.
 /// This can be loaded in the simulator to run the assembled code.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ObjectFile {
     /// A mapping of each block's address to its corresponding data.
     /// 
