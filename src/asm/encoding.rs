@@ -1,21 +1,60 @@
-//! Writing an object file to an actual file.
+//! Formatters which can read and write memory object files into disk.
+//! 
+//! The [`ObjFileFormat`] trait describes an implementation of reading/writing object files into disk.
+//! This module provides an implementation of the trait:
+//! - [`BinaryFormat`]: A binary representation of object file data
 
 use std::collections::{BTreeMap, HashMap};
 
 use super::{ObjectFile, SymbolTable};
 
-impl ObjectFile {
-    /// Writes an object file into a byte vector.
-    pub fn write_bytes(&self) -> Vec<u8> {
+/// A trait defining object file formats.
+// This trait might be an abuse of notation/namespacing, so oops.
+pub trait ObjFileFormat {
+    /// Representation of the serialized format.
+    /// 
+    /// For binary formats, `[u8]` should be used.
+    /// For text-based formats,`str` should be used.
+    type Stream: ToOwned + ?Sized;
+    /// Serializes into the stream format.
+    fn serialize(o: &ObjectFile) -> <Self::Stream as ToOwned>::Owned;
+    /// Deserializes from the stream format, returning `None`
+    /// if an error occurred during deserialization.
+    fn deserialize(i: &Self::Stream) -> Option<ObjectFile>;
+}
+
+// BINARY!
+/// A binary format of object file data.
+pub struct BinaryFormat;
+
+const BFMT_MAGIC: &[u8] = b"obj\x21\x10";
+const BFMT_VER: &[u8] = b"\x00\x01";
+impl ObjFileFormat for BinaryFormat {
+    type Stream = [u8];
+
+    fn serialize(o: &ObjectFile) -> <Self::Stream as ToOwned>::Owned {
         // Object file specification:
+        //
+        // Object file consists of a header and an arbitrary number of data blocks.
+        // 
+        // The header consists of:
+        // - The magic number (b"obj\x21\x10")
+        //      Coincidentally, `x21` is `!`, so opening this file with read "obj!"
+        //      That's fun.
+        // - The version (2 bytes)
+        //      Note that this is really arbitrary and backwards-incompatible changes
+        //      may occur without version upgrades.
+        //      The version will likely only upgrade if for some extenuating circumstance,
+        //      the exact object file format of a previous iteration must be maintained (never).
+        //
         // Data is divided into discrete chunks, which start with one of:
-        // - 0x00: assembled bytecode block
-        // - 0x01: label symbol table
-        // - 0x02: line symbol table
+        // - 0x00: assembled bytecode segment
+        // - 0x01: label symbol table entry
+        // - 0x02: line symbol table entry
         // - 0x03: source code information
         //
         // Block 0x00 consists of:
-        // - the identifier byte (1 byte)
+        // - the identifier byte 0x00 (1 byte)
         // - address where block starts (2 bytes)
         // - length of the block (2 bytes)
         // - the .orig span (16 bytes)
@@ -23,27 +62,29 @@ impl ObjectFile {
         //    - each word is either 0xFF???? (initialized data) or 0x000000 (uninitialized data)
         //
         // Block 0x01 consists of:
-        // - the identifier byte (1 byte)
+        // - the identifier byte 0x01 (1 byte)
         // - address of the label (2 bytes)
         // - the start of the label in source (8 bytes)
         // - the length of the label's name (8 bytes)
         // - the label (n bytes)
         //
         // Block 0x02 consists of:
-        // - the identifier byte (1 byte)
+        // - the identifier byte 0x02 (1 byte)
         // - the source line number (8 bytes)
         // - length of contiguous block (2 bytes)
         // - the contiguous block (2n bytes)
         // 
         // Block 0x03 consists of:
-        // - the identifier byte (1 byte)
+        // - the identifier byte 0x03 (1 byte)
         // - the length of the line indices table (8 bytes)
         // - the line indices table (8n bytes)
         // - the length of the source code (8 bytes)
         // the source code (n bytes)
-        
-        let mut bytes = vec![];
-        for (addr, data) in self.block_iter() {
+
+        let mut bytes = BFMT_MAGIC.to_vec();
+        bytes.extend_from_slice(BFMT_VER);
+
+        for (addr, data) in o.block_iter() {
             bytes.push(0x00);
             bytes.extend(u16::to_le_bytes(addr));
             bytes.extend(u16::to_le_bytes(data.len() as u16));
@@ -57,7 +98,7 @@ impl ObjectFile {
             }
         }
 
-        if let Some(sym) = &self.sym {
+        if let Some(sym) = &o.sym {
             for (label, &(addr, span_start)) in sym.label_map.iter() {
                 bytes.push(0x01);
                 bytes.extend(u16::to_le_bytes(addr));
@@ -85,24 +126,26 @@ impl ObjectFile {
                 bytes.extend_from_slice(src.src.as_bytes());
             }
         }
+
         bytes
     }
 
-    /// Reads a byte slice back into object file information,
-    /// returning None if a parsing error occurs.
-    pub fn read_bytes(mut vec: &[u8]) -> Option<ObjectFile> {
+    fn deserialize(mut vec: &Self::Stream) -> Option<ObjectFile> {
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::new();
         let mut line_map   = BTreeMap::new();
         let mut nl_indices = None;
         let mut src = None;
 
+        vec = vec.strip_prefix(BFMT_MAGIC)?
+            .strip_prefix(BFMT_VER)?;
+
         while let Some((ident_byte, rest)) = vec.split_first() {
             vec = rest;
             match ident_byte {
                 0x00 => {
-                    let addr            = u16::from_le_bytes(take::<2>(&mut vec)?);
-                    let data_len        = u16::from_le_bytes(take::<2>(&mut vec)?);
+                    let addr     = u16::from_le_bytes(take::<2>(&mut vec)?);
+                    let data_len = u16::from_le_bytes(take::<2>(&mut vec)?);
 
                     let data = map_chunks::<_, 3>(take_slice(&mut vec, 3 * usize::from(data_len))?, 
                         |[init, rest @ ..]| (init == 0xFF).then(|| u16::from_le_bytes(rest))

@@ -10,7 +10,7 @@
 //! 
 //! [`Stmt`]: crate::ast::asm::Stmt
 
-mod encoding;
+pub mod encoding;
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -22,7 +22,6 @@ use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
 use crate::err::ErrSpan;
-
 
 /// Assembles a assembly source code AST into an object file.
 /// 
