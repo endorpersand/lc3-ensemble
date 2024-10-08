@@ -199,6 +199,13 @@ const IO_START: u16 = 0xFE00;
 /// 9 | .end
 /// ```
 /// maps to `LineSymbolMap({1: [0x3000, 0x3001, 0x3002], 7: [0x4000, 0x4005]})`.
+/// 
+/// This data structure holds several invariants:
+/// - Line numbers should never overlap.
+/// - In a given block, the addresses should be in ascending order 
+///     (this has to occur in a well-formed program because regions constitute contiguous, non-overlapping parts of memory).
+/// 
+/// If these invariants are not held, invalid behavior can occur.
 #[derive(PartialEq, Eq)]
 struct LineSymbolMap(BTreeMap<usize, Vec<u16>>);
 
@@ -217,7 +224,7 @@ impl LineSymbolMap {
     /// through `LineSymbolMap`'s methods assume the values are sorted.
     /// 
     /// If they are not sorted, incorrect behaviors may occur. Skill issue.
-    fn new(lines: Vec<Option<u16>>) -> Self {
+    fn new(lines: Vec<Option<u16>>) -> Option<Self> {
         let mut blocks = BTreeMap::new();
         let mut current = None;
         for (i, line) in lines.into_iter().enumerate() {
@@ -229,7 +236,31 @@ impl LineSymbolMap {
             }
         }
 
-        Self(blocks)
+        Self::from_blocks(blocks)
+    }
+
+    fn from_blocks(blocks: impl IntoIterator<Item=(usize, Vec<u16>)>) -> Option<Self> {
+        let mut bl: Vec<_> = blocks.into_iter().collect();
+
+        bl.sort_by_key(|&(l, _)| l);
+        
+        // Check not overlapping:
+        let not_overlapping = bl.windows(2).all(|win| {
+            let [(ls, lb), (rs, _)] = win else { unreachable!() };
+            ls + lb.len() <= *rs
+        });
+
+        match not_overlapping {
+            true => {
+                // Check every individual block is sorted:
+                let sorted = bl.iter().all(|(_, lb)| {
+                    lb.windows(2).all(|win| win[0] <= win[1])
+                });
+
+                sorted.then(|| Self(bl.into_iter().collect()))
+            }
+            false => None,
+        }
     }
 
     /// Gets the memory address associated with this line, if it is present in the line symbol mapping.
@@ -572,7 +603,10 @@ impl SymbolTable {
         let label_map = labels.into_iter()
             .map(|(k, (addr, span))| (k, (addr, span.start))) // optimization
             .collect();
-        let line_map = LineSymbolMap::new(lines);
+        let line_map = LineSymbolMap::new(lines)
+            .unwrap_or_else(|| {
+                unreachable!("line symbol map's invariants should have been upheld during symbol table pass")
+            });
 
         Ok(SymbolTable { label_map, line_map, src_info })
     }

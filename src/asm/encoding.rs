@@ -205,7 +205,7 @@ impl ObjFileFormat for BinaryFormat {
                     }),
                     false => None,
                 },
-                line_map: super::LineSymbolMap(line_map)
+                line_map: super::LineSymbolMap::from_blocks(line_map)?
             }),
             false => None,
         };
@@ -502,7 +502,7 @@ impl ObjFileFormat for TextFormat {
             true => Some(SymbolTable {
                 label_map,
                 src_info: src.map(super::SourceInfo::from_string),
-                line_map: super::LineSymbolMap::new(line_map)
+                line_map: super::LineSymbolMap::new(line_map)?
             }),
             false => None,
         };
