@@ -327,6 +327,7 @@ impl SourceInfo {
         let nl_indices: Vec<_> = src
             .match_indices('\n')
             .map(|(i, _)| i)
+            .chain([src.len()])
             .collect();
 
         Self { src, nl_indices }
@@ -340,7 +341,7 @@ impl SourceInfo {
     /// Counts the number of lines in the source string.
     pub fn count_lines(&self) -> usize {
         // The first line, plus every line after (delimited by a new line)
-        self.nl_indices.len() + 1
+        self.nl_indices.len()
     }
 
     /// Gets the character range for the provided line, including any whitespace.
@@ -349,14 +350,12 @@ impl SourceInfo {
     fn raw_line_span(&self, line: usize) -> Option<Range<usize>> {
         // Implementation detail:
         // number of lines = self.nl_indices.len() + 1
-        if !(0..=self.nl_indices.len()).contains(&line) {
+        if !(0..self.count_lines()).contains(&line) {
             return None;
         };
 
-        let end = match self.nl_indices.get(line) {
-            Some(&n) => n,
-            None     => self.src.len(),
-        };
+        let &end = self.nl_indices.get(line)
+            .unwrap_or_else(|| self.nl_indices.last().unwrap());
         
         let start = match line == 0 {
             false => self.nl_indices[line - 1] + 1,
