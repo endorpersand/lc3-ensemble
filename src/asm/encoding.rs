@@ -78,8 +78,6 @@ impl ObjFileFormat for BinaryFormat {
         // 
         // Block 0x03 consists of:
         // - the identifier byte 0x03 (1 byte)
-        // - the length of the line indices table (8 bytes)
-        // - the line indices table (8n bytes)
         // - the length of the source code (8 bytes)
         // the source code (n bytes)
 
@@ -120,10 +118,6 @@ impl ObjFileFormat for BinaryFormat {
 
             if let Some(src) = &sym.src_info {
                 bytes.push(0x03);
-                bytes.extend(u64::to_le_bytes(src.nl_indices.len() as u64));
-                for &index in &src.nl_indices {
-                    bytes.extend(u64::to_le_bytes(index as u64));
-                }
                 bytes.extend(u64::to_le_bytes(src.src.len() as u64));
                 bytes.extend_from_slice(src.src.as_bytes());
             }
@@ -136,8 +130,7 @@ impl ObjFileFormat for BinaryFormat {
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::new();
         let mut line_map   = BTreeMap::new();
-        let mut nl_indices = None;
-        let mut src = None;
+        let mut src        = None;
 
         vec = vec.strip_prefix(BFMT_MAGIC)?
             .strip_prefix(BFMT_VER)?;
@@ -175,17 +168,7 @@ impl ObjFileFormat for BinaryFormat {
                     line_map.insert(lno, data);
                 },
                 0x03 => {
-                    let ref_li  = nl_indices.get_or_insert(vec![]);
-                    let ref_src = src.get_or_insert(String::new());
-
-                    let li_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
-                    let li     = map_chunks::<_, 8>(take_slice(&mut vec, 8 * li_len)?, |arr| u64::from_le_bytes(arr) as usize);
-                    ref_li.extend(li);
-
-                    // Assert line indices has sorted data without duplicates,
-                    // as calculations with nl_indices depends on the list being sorted
-                    // and assumes no duplicates (since no two lines have the new line at the same place)
-                    assert_sorted_no_dup(ref_li)?;
+                    let ref_src = src.get_or_insert_with(String::new);
 
                     let src_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let obj_src = std::str::from_utf8(take_slice(&mut vec, src_len)?).ok()?;
@@ -195,14 +178,11 @@ impl ObjFileFormat for BinaryFormat {
             }
         }
 
-        let sym = match !label_map.is_empty() || !line_map.is_empty() || nl_indices.is_some() {
+        let sym = match !label_map.is_empty() || !line_map.is_empty() {
             true => Some(SymbolTable {
                 label_map,
-                src_info: match !line_map.is_empty() || nl_indices.is_some() {
-                    true  => Some(super::SourceInfo {
-                        src: src?, 
-                        nl_indices: nl_indices?,
-                    }),
+                src_info: match !line_map.is_empty() {
+                    true  => src.map(super::SourceInfo::from_string),
                     false => None,
                 },
                 line_map: super::LineSymbolMap::from_blocks(line_map)?
