@@ -1,10 +1,22 @@
+# 0.8.0 (October 15, 2024)
+
+- Removed `Parse` for `u16` and `i16` (introduced in `0.7.2` to fix `.fill -32` bug) in favor for `parse::simple::IntLiteral`
+- Added support for a text-based encoding format (`TextFormat::serialize`, `TextFormat::deserialize`)
+  - Due to this change, `ObjectFile::read_bytes` and `ObjectFile::write_bytes` have been removed in favor for `BinaryFormat::serialize`/`BinaryFormat::deserialize`.
+- Linking
+  - Adds support for `.external` in the assembler
+  - Adds `ObjectFile::link` (for linking two object files)
+- Internal refactor resulting in a change in `AsmErr`:
+  - `AsmErr::ExcessiveBlock` is removed
+  - `AsmErr::BlockInIO` and `AsmErr::WrappingBlock` for object files that write to IO and those that wrap memory
+
 # 0.7.2 (October 2, 2024)
 
 - Fixed bug where `.fill -32` (or any negative number) would error.
 
 # 0.7.1 (September 20, 2024)
 
-- Added new SourceInfo APIs that allow constructing SourceInfo structs from source strings 
+- Added new SourceInfo APIs that allow constructing SourceInfo structs from source strings.
   - `SourceInfo::new`, `SourceInfo::from(String)`
 
 # 0.7.0 (September 19, 2024)
