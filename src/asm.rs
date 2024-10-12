@@ -1546,4 +1546,43 @@ mod tests {
         let mut de = TextFormat::deserialize(&ser).expect("text encoding should've been parseable");
         assert_obj_equal(&mut de, &obj, "text encoding could not be roundtripped");
     }
+
+    #[test]
+    fn test_basic_link() {
+        let library = "
+            .orig x5000
+                ADDER ADD R2, R0, R1
+                RET
+            .end
+        ";
+
+        let program = "
+            .external ADDER
+
+            .orig x4000
+                LD R0, A
+                LD R1, B
+
+                LD R3, ADDER_ADDR
+                JSRR R3
+
+                HALT
+
+                A .fill 10
+                B .fill 20
+                ADDER_ADDR .fill ADDER
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog_obj = assemble_src(program).unwrap();
+        ObjectFile::link(lib_obj, prog_obj).unwrap();
+
+        // TODO: Check... 
+        // - overlapping labels
+        // - overlapping blocks
+        // - linking two files with the same external
+        // - object file encoding w/ linkage
+        // - using external label in offset operand
+    }
 }
