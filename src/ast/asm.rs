@@ -416,7 +416,18 @@ pub enum Directive {
     /// 
     /// `.end`
     End,
-    // External
+
+    /// A `.external` directive.
+    /// 
+    /// # Operation
+    /// 
+    /// Designates that a label is external, 
+    /// meaning it is not defined within the file and must be linked in.
+    /// 
+    /// # Syntax
+    /// 
+    /// `.external LABEL`
+    External(Label),
 }
 impl std::fmt::Display for Directive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -426,6 +437,7 @@ impl std::fmt::Display for Directive {
             Self::Blkw(n)      => write!(f, ".blkw {n}"),
             Self::Stringz(val) => write!(f, ".stringz {val:?}"),
             Self::End          => write!(f, ".end"),
+            Self::External(lb) => write!(f, ".external {lb}"),
         }
     }
 }

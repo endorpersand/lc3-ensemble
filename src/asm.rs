@@ -531,6 +531,23 @@ impl SymbolTable {
             }
         }
 
+        fn add_label(
+            labels: &mut HashMap<String, (u16, Span)>, 
+            label: &crate::ast::Label, 
+            addr: u16
+        ) -> Result<(), AsmErr> {
+            match labels.entry(label.name.to_uppercase()) {
+                Entry::Occupied(e) => {
+                    let (_, span1) = e.get();
+                    Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span()]))
+                },
+                Entry::Vacant(e) => {
+                    e.insert((addr, label.span()));
+                    Ok(())
+                }
+            }
+        }
+
         // Index where each new line appears.
         let src_info = src.map(SourceInfo::new);
         let mut cursor: Option<Cursor> = None;
@@ -552,17 +569,11 @@ impl SymbolTable {
 
                 // Add labels
                 for label in &stmt.labels {
-                    match labels.entry(label.name.to_uppercase()) {
-                        Entry::Occupied(e) => {
-                            let (_, span1) = e.get();
-                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span()]))
-                        },
-                        Entry::Vacant(e) => e.insert((cur.lc, label.span())),
-                    };
+                    add_label(&mut labels, label, cur.lc)?;
                 }
             }
 
-            // Handle .orig, .end cases:
+            // Handle special directives:
             match &stmt.nucleus {
                 StmtKind::Directive(Directive::Orig(addr)) => match cursor {
                     Some(cur) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, [cur.block_orig, stmt.span.clone()])),
@@ -571,6 +582,19 @@ impl SymbolTable {
                 StmtKind::Directive(Directive::End) => match cursor {
                     Some(_) => { cursor.take(); },
                     None    => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone())),
+                },
+                StmtKind::Directive(Directive::External(label)) => {
+                    add_label(&mut labels, label, 0)?;
+                }
+                StmtKind::Directive(Directive::Fill(PCOffset::Label(label))) => {
+                    let label_text = label.name.to_uppercase();
+                    if let Some((addr, _)) = labels.get_mut(&label_text) {
+                        let Some(cur) = cursor.as_ref() else {
+                            return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span.clone()));
+                        };
+
+                        *addr = cur.lc;
+                    }
                 },
                 _ => {}
             };
@@ -903,11 +927,12 @@ impl Directive {
     /// How many words this directive takes up in memory.
     fn word_len(&self) -> u16 {
         match self {
-            Directive::Orig(_)    => 0,
-            Directive::Fill(_)    => 1,
-            Directive::Blkw(n)    => n.get(),
-            Directive::Stringz(s) => s.len() as u16 + 1, // lex should assure that s + 1 <= 65535
-            Directive::End        => 0,
+            Directive::Orig(_)     => 0,
+            Directive::Fill(_)     => 1,
+            Directive::Blkw(n)     => n.get(),
+            Directive::Stringz(s)  => s.len() as u16 + 1, // lex should assure that s + 1 <= 65535
+            Directive::End         => 0,
+            Directive::External(_) => 0,
         }
     }
 }
@@ -982,6 +1007,7 @@ impl ObjectFile {
                         self.push(0);
                     },
                     Directive::End => {},
+                    Directive::External(_) => {},
                 }
 
                 Ok(())
@@ -1043,6 +1069,7 @@ impl ObjectFile {
 
                     block_map.insert(block.start, block);
                 },
+                StmtKind::Directive(Directive::External(_)) => {},
                 StmtKind::Directive(directive) => {
                     let Some((lc, block)) = &mut current else {
                         return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
