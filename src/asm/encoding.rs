@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
-use super::{ObjectFile, SymbolTable};
+use super::{ObjectFile, SymbolData, SymbolTable};
 
 /// A trait defining object file formats.
 // This trait might be an abuse of notation/namespacing, so oops.
@@ -99,10 +99,10 @@ impl ObjFileFormat for BinaryFormat {
         }
 
         if let Some(sym) = &o.sym {
-            for (label, &(addr, span_start)) in sym.label_map.iter() {
+            for (label, &super::SymbolData { addr, src_start }) in sym.label_map.iter() {
                 bytes.push(0x01);
                 bytes.extend(u16::to_le_bytes(addr));
-                bytes.extend(u64::to_le_bytes(span_start as u64));
+                bytes.extend(u64::to_le_bytes(src_start as u64));
                 bytes.extend(u64::to_le_bytes(label.len() as u64));
                 bytes.extend_from_slice(label.as_bytes());
             }
@@ -150,11 +150,11 @@ impl ObjFileFormat for BinaryFormat {
                 },
                 0x01 => {
                     let addr       = u16::from_le_bytes(take::<2>(&mut vec)?);
-                    let span_start = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
+                    let src_start = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let str_len    = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let string     = String::from_utf8(take_slice(&mut vec, str_len)?.to_vec()).ok()?;
 
-                    label_map.insert(string, (addr, span_start));
+                    label_map.insert(string, SymbolData { addr, src_start });
                 },
                 0x02 => {
                     let lno      = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
@@ -308,7 +308,7 @@ impl ObjFileFormat for TextFormat {
                 if !sym.label_map.is_empty() {
                     // Calculate label & index column lengths
                     let (label_col, index_col) = sym.label_map.iter()
-                        .map(|(s, &(_, span_start))| (s.len(), count_digits(span_start)))
+                        .map(|(s, sym_data)| (s.len(), count_digits(sym_data.src_start)))
                         .fold(
                             (LABEL.len(), INDEX.len()), 
                             |(lc, ic), (lx, ix)| (lc.max(lx), ic.max(ix))
@@ -316,8 +316,8 @@ impl ObjFileFormat for TextFormat {
 
                     // Display!
                     writeln!(buf, "{LABEL:1$}{0}{INDEX:2$}", TABLE_DIV, label_col, index_col)?;
-                    for (label, &(_, span_start)) in sym.label_map.iter() {
-                        writeln!(buf, "{label:1$}{0}{span_start:2$}", TABLE_DIV, label_col, index_col)?;
+                    for (label, SymbolData { src_start, .. }) in sym.label_map.iter() {
+                        writeln!(buf, "{label:1$}{0}{src_start:2$}", TABLE_DIV, label_col, index_col)?;
                     }
                 }
                 writeln!(buf, "====================")?;
@@ -387,7 +387,7 @@ impl ObjFileFormat for TextFormat {
         // Warning: spaghetti.
 
         let mut block_map  = BTreeMap::new();
-        let mut label_map  = HashMap::<_, (_, _)>::new();
+        let mut label_map  = HashMap::<_, SymbolData>::new();
         let mut line_map   = vec![];
         let mut src        = None;
 
@@ -437,7 +437,7 @@ impl ObjFileFormat for TextFormat {
 
                     for (addr, label) in table {
                         // TODO: what happens if .SYMBOL label + .DEBUG label mismatch
-                        label_map.entry(label.to_string()).or_default().0 = addr;
+                        label_map.entry(label.to_string()).or_default().addr = addr;
                     }
                 },
                 ".DEBUG" => if !rest.is_empty() {
@@ -450,7 +450,7 @@ impl ObjFileFormat for TextFormat {
                         Some((label, index))
                     }, true)?;
                     for (label, index) in label_table {
-                        label_map.entry(label.to_string()).or_default().1 = index;
+                        label_map.entry(label.to_string()).or_default().src_start = index;
                     }
 
                     let mut line_table = parse_table(line_src, ["LINE", "ADDR", "SOURCE"], |cols, i| {

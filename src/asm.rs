@@ -420,6 +420,17 @@ impl From<String> for SourceInfo {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Default)]
+struct SymbolData {
+    addr: u16,
+    src_start: usize
+}
+impl SymbolData {
+    /// Calculates the source range of this symbol, given the name of the label.
+    fn range(&self, label: &str) -> Range<usize> {
+        self.src_start .. (self.src_start + label.len())
+    }
+}
 /// The symbol table created in the first assembler pass
 /// that encodes source code mappings to memory addresses in the object file.
 /// 
@@ -453,7 +464,7 @@ impl From<String> for SourceInfo {
 #[derive(PartialEq, Eq)]
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
-    label_map: HashMap<String, (u16, usize)>,
+    label_map: HashMap<String, SymbolData>,
 
     /// A mapping from each line with a statement in the source to an address.
     line_map: LineSymbolMap,
@@ -624,7 +635,7 @@ impl SymbolTable {
         }
         
         let label_map = labels.into_iter()
-            .map(|(k, (addr, span))| (k, (addr, span.start))) // optimization
+            .map(|(k, (addr, span))| (k, SymbolData { addr, src_start: span.start }))
             .collect();
         let line_map = LineSymbolMap::new(lines)
             .unwrap_or_else(|| {
@@ -663,7 +674,7 @@ impl SymbolTable {
     /// assert_eq!(sym.lookup_label("LOOP_DE_LOOP"), None);
     /// ```
     pub fn lookup_label(&self, label: &str) -> Option<u16> {
-        self.label_map.get(&label.to_uppercase()).map(|&(addr, _)| addr)
+        self.label_map.get(&label.to_uppercase()).map(|sym_data| sym_data.addr)
     }
     
     /// Gets the label at a given memory address (if it exists).
@@ -696,7 +707,7 @@ impl SymbolTable {
     /// ```
     pub fn rev_lookup_label(&self, addr: u16) -> Option<&str> {
         let (label, _) = self.label_map.iter()
-            .find(|&(_, (label_addr, _))| label_addr == &addr)?;
+            .find(|&(_, sym_data)| sym_data.addr == addr)?;
 
         Some(label)
     }
@@ -722,8 +733,8 @@ impl SymbolTable {
     /// assert_eq!(sym.get_label_source("LOOP_DE_LOOP"), None);
     /// ```
     pub fn get_label_source(&self, label: &str) -> Option<Range<usize>> {
-        let &(_, start) = self.label_map.get(label)?;
-        Some(start..(start + label.len()))
+        self.label_map.get(label)
+            .map(|data| data.range(label))
     }
 
     /// Gets the address of a given source line.
@@ -826,7 +837,7 @@ impl SymbolTable {
     /// Gets an iterable of the mapping from labels to addresses.
     pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
         self.label_map.iter()
-            .map(|(label, &(addr, _))| (&**label, addr))
+            .map(|(label, sym_data)| (&**label, sym_data.addr))
     }
 
     /// Gets an iterable of the mapping from lines to addresses.
@@ -853,7 +864,9 @@ impl std::fmt::Debug for SymbolTable {
         f.debug_struct("SymbolTable")
             .field("label_map", &ClosureMap(|| {
                 self.label_map.iter()
-                    .map(|(k, &(addr, start))| (k, (Addr(addr), start..(start + k.len()))))
+                    .map(|(k, data @ SymbolData { addr, .. })| {
+                        (k, (Addr(*addr), data.range(k)))
+                    })
             }))
             .field("line_map", &self.line_map)
             .field("source_info", &self.src_info)
