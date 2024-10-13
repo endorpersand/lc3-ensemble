@@ -427,7 +427,7 @@ struct SymbolData {
 }
 impl SymbolData {
     /// Calculates the source range of this symbol, given the name of the label.
-    fn range(&self, label: &str) -> Range<usize> {
+    fn span(&self, label: &str) -> Range<usize> {
         self.src_start .. (self.src_start + label.len())
     }
 }
@@ -543,17 +543,18 @@ impl SymbolTable {
         }
 
         fn add_label(
-            labels: &mut HashMap<String, (u16, Span)>, 
+            labels: &mut HashMap<String, SymbolData>, 
             label: &crate::ast::Label, 
             addr: u16
         ) -> Result<(), AsmErr> {
             match labels.entry(label.name.to_uppercase()) {
                 Entry::Occupied(e) => {
-                    let (_, span1) = e.get();
-                    Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span()]))
+                    let span1 = e.get().span(e.key());
+                    let span2 = label.span();
+                    Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1, span2]))
                 },
                 Entry::Vacant(e) => {
-                    e.insert((addr, label.span()));
+                    e.insert(SymbolData { addr, src_start: label.span().start });
                     Ok(())
                 }
             }
@@ -562,7 +563,7 @@ impl SymbolTable {
         // Index where each new line appears.
         let src_info = src.map(SourceInfo::new);
         let mut cursor: Option<Cursor> = None;
-        let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
+        let mut label_map: HashMap<String, SymbolData> = HashMap::new();
         let mut lines = vec![None; src_info.as_ref().map_or(0, SourceInfo::count_lines) + 1];
 
         for stmt in stmts {
@@ -580,7 +581,7 @@ impl SymbolTable {
 
                 // Add labels
                 for label in &stmt.labels {
-                    add_label(&mut labels, label, cur.lc)?;
+                    add_label(&mut label_map, label, cur.lc)?;
                 }
             }
 
@@ -595,11 +596,11 @@ impl SymbolTable {
                     None    => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone())),
                 },
                 StmtKind::Directive(Directive::External(label)) => {
-                    add_label(&mut labels, label, 0)?;
+                    add_label(&mut label_map, label, 0)?;
                 }
                 StmtKind::Directive(Directive::Fill(PCOffset::Label(label))) => {
                     let label_text = label.name.to_uppercase();
-                    if let Some((addr, _)) = labels.get_mut(&label_text) {
+                    if let Some(SymbolData { addr, src_start: _ }) = label_map.get_mut(&label_text) {
                         let Some(cur) = cursor.as_ref() else {
                             return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span.clone()));
                         };
@@ -634,9 +635,6 @@ impl SymbolTable {
             return Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig));
         }
         
-        let label_map = labels.into_iter()
-            .map(|(k, (addr, span))| (k, SymbolData { addr, src_start: span.start }))
-            .collect();
         let line_map = LineSymbolMap::new(lines)
             .unwrap_or_else(|| {
                 unreachable!("line symbol map's invariants should have been upheld during symbol table pass")
@@ -734,7 +732,7 @@ impl SymbolTable {
     /// ```
     pub fn get_label_source(&self, label: &str) -> Option<Range<usize>> {
         self.label_map.get(label)
-            .map(|data| data.range(label))
+            .map(|data| data.span(label))
     }
 
     /// Gets the address of a given source line.
@@ -865,7 +863,7 @@ impl std::fmt::Debug for SymbolTable {
             .field("label_map", &ClosureMap(|| {
                 self.label_map.iter()
                     .map(|(k, data @ SymbolData { addr, .. })| {
-                        (k, (Addr(*addr), data.range(k)))
+                        (k, (Addr(*addr), data.span(k)))
                     })
             }))
             .field("line_map", &self.line_map)
