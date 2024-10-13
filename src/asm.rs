@@ -284,9 +284,15 @@ impl LineSymbolMap {
             })
     }
 
+    /// Gets an iterable representing the block mappings.
+    fn block_iter(&self) -> impl Iterator<Item=(usize, &[u16])> + '_ {
+        self.0.iter()
+            .map(|(&i, words)| (i, words.as_slice()))
+    }
+
     /// Gets an iterable representing the mapping of line numbers to addresses.
     fn iter(&self) -> impl Iterator<Item=(usize, u16)> + '_ {
-        self.0.iter()
+        self.block_iter()
             .flat_map(|(i, words)| {
                 words.iter()
                     .enumerate()
@@ -431,6 +437,25 @@ impl SymbolData {
         self.src_start .. (self.src_start + label.len())
     }
 }
+
+/// Debug symbols.
+#[derive(PartialEq, Eq, Debug)]
+struct DebugSymbols {
+    /// A mapping from each line with a statement in the source to an address.
+    line_map: LineSymbolMap,
+
+    /// Information about the source.
+    src_info: SourceInfo
+}
+impl DebugSymbols {
+    pub fn lookup_line(&self, line: usize) -> Option<u16> {
+        self.line_map.get(line)
+    }
+
+    pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
+        self.line_map.find(addr)
+    }
+}
 /// The symbol table created in the first assembler pass
 /// that encodes source code mappings to memory addresses in the object file.
 /// 
@@ -466,11 +491,8 @@ pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, SymbolData>,
 
-    /// A mapping from each line with a statement in the source to an address.
-    line_map: LineSymbolMap,
-
-    /// Information about the source.
-    src_info: Option<SourceInfo>,
+    /// Debug symbols. If None, there were no debug symbols provided.
+    debug_symbols: Option<DebugSymbols>,
 }
 
 impl SymbolTable {
@@ -560,11 +582,12 @@ impl SymbolTable {
             }
         }
 
-        // Index where each new line appears.
-        let src_info = src.map(SourceInfo::new);
         let mut cursor: Option<Cursor> = None;
         let mut label_map: HashMap<String, SymbolData> = HashMap::new();
-        let mut lines = vec![None; src_info.as_ref().map_or(0, SourceInfo::count_lines) + 1];
+        let mut debug_sym = src.map(|s| {
+            let src_info = SourceInfo::new(s);
+            (vec![None; src_info.count_lines()], src_info)
+        });
 
         for stmt in stmts {
             // Add labels if they exist
@@ -616,7 +639,7 @@ impl SymbolTable {
                 // Debug symbol:
                 // Calculate which source code line is associated with the instruction the LC is currently pointing to
                 // and add the mapping from line to instruction address.
-                if let Some(s) = &src_info {
+                if let Some((lines, s)) = &mut debug_sym {
                     if !matches!(stmt.nucleus, StmtKind::Directive(Directive::Orig(_) | Directive::End)) {
                         let line_index = s.get_line(stmt.span.start);
                         lines[line_index].replace(cur.lc);
@@ -635,12 +658,15 @@ impl SymbolTable {
             return Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig));
         }
         
-        let line_map = LineSymbolMap::new(lines)
+        let debug_symbols = debug_sym.map(|(lines, src_info)| DebugSymbols {
+            line_map: LineSymbolMap::new(lines)
             .unwrap_or_else(|| {
                 unreachable!("line symbol map's invariants should have been upheld during symbol table pass")
-            });
+            }),
+            src_info,
+        });
 
-        Ok(SymbolTable { label_map, line_map, src_info })
+        Ok(SymbolTable { label_map, debug_symbols })
     }
 
     /// Gets the memory address of a given label (if it exists).
@@ -774,7 +800,7 @@ impl SymbolTable {
     /// assert_eq!(sym.lookup_line(10), None);
     /// ```
     pub fn lookup_line(&self, line: usize) -> Option<u16> {
-        self.line_map.get(line)
+        self.debug_symbols.as_ref()?.lookup_line(line)
     }
 
     /// Gets the source line of a given memory address (if it exists.)
@@ -824,12 +850,12 @@ impl SymbolTable {
     /// assert_eq!(sym.rev_lookup_line(0x300F),  None);
     /// ```
     pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
-        self.line_map.find(addr)
+        self.debug_symbols.as_ref()?.rev_lookup_line(addr)
     }
 
     /// Reads the source info from this symbol table (if debug symbols are enabled).
     pub fn source_info(&self) -> Option<&SourceInfo> {
-        self.src_info.as_ref()
+        self.debug_symbols.as_ref().map(|ds| &ds.src_info)
     }
 
     /// Gets an iterable of the mapping from labels to addresses.
@@ -839,8 +865,11 @@ impl SymbolTable {
     }
 
     /// Gets an iterable of the mapping from lines to addresses.
+    /// 
+    /// This iterator will be empty if debug symbols were not enabled.
     pub fn line_iter(&self) -> impl Iterator<Item=(usize, u16)> + '_ {
-        self.line_map.iter()
+        self.debug_symbols.iter()
+            .flat_map(|s| s.line_map.iter())
     }
 }
 impl std::fmt::Debug for SymbolTable {
@@ -866,8 +895,7 @@ impl std::fmt::Debug for SymbolTable {
                         (k, (Addr(*addr), data.span(k)))
                     })
             }))
-            .field("line_map", &self.line_map)
-            .field("source_info", &self.src_info)
+            .field("debug_symbols", &self.debug_symbols)
             .finish()
     }
 }

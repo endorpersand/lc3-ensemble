@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
-use super::{ObjectFile, SymbolData, SymbolTable};
+use super::{DebugSymbols, ObjectFile, SymbolData, SymbolTable};
 
 /// A trait defining object file formats.
 // This trait might be an abuse of notation/namespacing, so oops.
@@ -107,19 +107,20 @@ impl ObjFileFormat for BinaryFormat {
                 bytes.extend_from_slice(label.as_bytes());
             }
 
-            for (lno, data) in sym.line_map.0.iter() {
-                bytes.push(0x02);
-                bytes.extend(u64::to_le_bytes(*lno as u64));
-                bytes.extend(u16::to_le_bytes(data.len() as u16));
-                for &word in data {
-                    bytes.extend(u16::to_le_bytes(word));
+            if let Some(debug_sym) = &sym.debug_symbols {
+                for (lno, data) in debug_sym.line_map.block_iter() {
+                    bytes.push(0x02);
+                    bytes.extend(u64::to_le_bytes(lno as u64));
+                    bytes.extend(u16::to_le_bytes(data.len() as u16));
+                    for &word in data {
+                        bytes.extend(u16::to_le_bytes(word));
+                    }
                 }
-            }
 
-            if let Some(src) = &sym.src_info {
+                let src = &debug_sym.src_info.src;
                 bytes.push(0x03);
-                bytes.extend(u64::to_le_bytes(src.src.len() as u64));
-                bytes.extend_from_slice(src.src.as_bytes());
+                bytes.extend(u64::to_le_bytes(src.len() as u64));
+                bytes.extend_from_slice(src.as_bytes());
             }
         }
 
@@ -129,8 +130,7 @@ impl ObjFileFormat for BinaryFormat {
     fn deserialize(mut vec: &Self::Stream) -> Option<ObjectFile> {
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::new();
-        let mut line_map   = BTreeMap::new();
-        let mut src        = None;
+        let mut debug_sym  = None::<(BTreeMap<_, _>, String)>;
 
         vec = vec.strip_prefix(BFMT_MAGIC)?
             .strip_prefix(BFMT_VER)?;
@@ -149,14 +149,15 @@ impl ObjFileFormat for BinaryFormat {
                     block_map.insert(addr, data);
                 },
                 0x01 => {
-                    let addr       = u16::from_le_bytes(take::<2>(&mut vec)?);
+                    let addr      = u16::from_le_bytes(take::<2>(&mut vec)?);
                     let src_start = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
-                    let str_len    = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
-                    let string     = String::from_utf8(take_slice(&mut vec, str_len)?.to_vec()).ok()?;
+                    let str_len   = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
+                    let string    = String::from_utf8(take_slice(&mut vec, str_len)?.to_vec()).ok()?;
 
                     label_map.insert(string, SymbolData { addr, src_start });
                 },
                 0x02 => {
+                    let (line_map, _) = debug_sym.get_or_insert_with(Default::default);
                     let lno      = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let data_len = u16::from_le_bytes(take::<2>(&mut vec)?);
                     let data     = map_chunks::<_, 2>(take_slice(&mut vec, 2 * usize::from(data_len))?, u16::from_le_bytes);
@@ -168,27 +169,26 @@ impl ObjFileFormat for BinaryFormat {
                     line_map.insert(lno, data);
                 },
                 0x03 => {
-                    let ref_src = src.get_or_insert_with(String::new);
+                    let (_, src) = debug_sym.get_or_insert_with(Default::default);
 
                     let src_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let obj_src = std::str::from_utf8(take_slice(&mut vec, src_len)?).ok()?;
-                    ref_src.push_str(obj_src);
+                    src.push_str(obj_src);
                 }
                 _ => return None
             }
         }
 
-        let sym = match !label_map.is_empty() || !line_map.is_empty() {
-            true => Some(SymbolTable {
-                label_map,
-                src_info: match !line_map.is_empty() {
-                    true  => src.map(super::SourceInfo::from_string),
-                    false => None,
-                },
-                line_map: super::LineSymbolMap::from_blocks(line_map)?
+        let debug_symbols = match debug_sym {
+            Some((line_map, src)) => Some(DebugSymbols {
+                // Error should propagate to deser
+                line_map: super::LineSymbolMap::from_blocks(line_map)?,
+                src_info: super::SourceInfo::from_string(src),
             }),
-            false => None,
+            None => None,
         };
+        let sym = (!label_map.is_empty() || debug_symbols.is_some())
+            .then_some(SymbolTable { label_map, debug_symbols });
         Some(ObjectFile {
             block_map,
             sym,
@@ -322,58 +322,58 @@ impl ObjFileFormat for TextFormat {
                 }
                 writeln!(buf, "====================")?;
 
-                // Create line table
-                let mut line_table: BTreeMap<usize, (Option<usize>, Option<u16>)> = BTreeMap::new();
-                if let Some(src) = &sym.src_info {
-                    line_table.extend({
-                        src.nl_indices.iter().enumerate()
+                if let Some(DebugSymbols { line_map, src_info }) = &sym.debug_symbols {
+                    // Create line table
+                    let mut line_table = BTreeMap::from_iter({
+                        src_info.nl_indices.iter().enumerate()
                             .map(|(lno, &idx)| (lno, (Some(idx), None)))
                     });
-                }
-                for (&start_line, block) in sym.line_map.0.iter() {
-                    for (i, &addr) in block.iter().enumerate() {
-                        let (_, entry_addr) = line_table.entry(start_line.wrapping_add(i)).or_default();
-                        entry_addr.replace(addr);
-                    }
-                }
-
-                // Display line table
-                const LINE: &str = "LINE";
-                if !line_table.is_empty() {
-                    // Compute line & index column length
-                    let (mut last_line, mut last_index) = (None, None);
-                    for (&line, &(index, _)) in line_table.iter().rev() {
-                        if last_line.is_none() { last_line.replace(line); }
-                        if last_index.is_none() { last_index = index; }
-
-                        if last_line.is_some() && last_index.is_some() {
-                            break;
+                    
+                    for (start_line, block) in line_map.block_iter() {
+                        for (i, &addr) in block.iter().enumerate() {
+                            let (_, entry_addr) = line_table.entry(start_line.wrapping_add(i)).or_default();
+                            entry_addr.replace(addr);
                         }
                     }
-                    let line_col = LINE.len().max(count_digits(last_line.unwrap_or(0)));
-
-                    // Display!
-                    writeln!(buf, "{LINE:1$}{0}ADDR{0}SOURCE", TABLE_DIV, line_col)?;
-                    for (line, (_, m_addr)) in line_table {
-                        write!(buf, "{line:0$}", line_col)?;
-                        write!(buf, "{TABLE_DIV}")?;
-                        match m_addr {
-                            Some(addr) => write!(buf, "{addr:04X}"),
-                            None => write!(buf, "{TFMT_UNINIT}")
-                        }?;
-                        write!(buf, "{TABLE_DIV}")?;
-
-                        // Line:
-                        let src_line = sym.src_info.as_ref()
-                            .and_then(|s| Some(&s.source()[s.raw_line_span(line)?]))
-                            .unwrap_or("");
-                        write!(buf, "{src_line}")?;
-
-                        writeln!(buf)?;
+    
+                    // Display line table
+                    const LINE: &str = "LINE";
+                    if !line_table.is_empty() {
+                        // Compute line & index column length
+                        let (mut last_line, mut last_index) = (None, None);
+                        for (&line, &(index, _)) in line_table.iter().rev() {
+                            if last_line.is_none() { last_line.replace(line); }
+                            if last_index.is_none() { last_index = index; }
+    
+                            if last_line.is_some() && last_index.is_some() {
+                                break;
+                            }
+                        }
+                        let line_col = LINE.len().max(count_digits(last_line.unwrap_or(0)));
+    
+                        // Display!
+                        writeln!(buf, "{LINE:1$}{0}ADDR{0}SOURCE", TABLE_DIV, line_col)?;
+                        for (line, (_, m_addr)) in line_table {
+                            write!(buf, "{line:0$}", line_col)?;
+                            write!(buf, "{TABLE_DIV}")?;
+                            match m_addr {
+                                Some(addr) => write!(buf, "{addr:04X}"),
+                                None => write!(buf, "{TFMT_UNINIT}")
+                            }?;
+                            write!(buf, "{TABLE_DIV}")?;
+    
+                            // Line:
+                            let src_line = src_info.raw_line_span(line)
+                                .and_then(|r| src_info.source().get(r))
+                                .unwrap_or("");
+                            write!(buf, "{src_line}")?;
+    
+                            writeln!(buf)?;
+                        }
                     }
+    
+                    writeln!(buf, "====================")?;
                 }
-
-                writeln!(buf, "====================")?;
             }
 
 
@@ -388,8 +388,7 @@ impl ObjFileFormat for TextFormat {
 
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::<_, SymbolData>::new();
-        let mut line_map   = vec![];
-        let mut src        = None;
+        let mut debug_sym  = None::<(Vec<_>, String)>;
 
         // Read all of the non-empty lines:
         let mut lines = string.trim().lines()
@@ -463,29 +462,31 @@ impl ObjFileFormat for TextFormat {
                     }, false)?;
 
                     if let Some((last_m_addr, last_line)) = line_table.pop() {
-                        let s = src.get_or_insert_with(String::new);
+                        let (line_map, src) = debug_sym.get_or_insert_with(Default::default);
 
                         for (m_addr, line) in line_table {
                             line_map.push(m_addr);
-                            writeln!(s, "{line}").unwrap();
+                            writeln!(src, "{line}").unwrap();
                         }
                         
                         line_map.push(last_m_addr);
-                        write!(s, "{last_line}").unwrap();
+                        write!(src, "{last_line}").unwrap();
                     }
                 },
                 _ => return None
             }
         }
 
-        let sym = match !label_map.is_empty() || !line_map.is_empty() || src.is_some() {
-            true => Some(SymbolTable {
-                label_map,
-                src_info: src.map(super::SourceInfo::from_string),
-                line_map: super::LineSymbolMap::new(line_map)?
+        let debug_symbols = match debug_sym {
+            Some((line_map, src)) => Some(DebugSymbols {
+                // propagate error to deser
+                line_map: super::LineSymbolMap::new(line_map)?,
+                src_info: super::SourceInfo::from_string(src),
             }),
-            false => None,
+            None => None,
         };
+        let sym = (!label_map.is_empty() || debug_symbols.is_some())
+            .then_some(SymbolTable { label_map, debug_symbols });
         Some(ObjectFile {
             block_map,
             sym,
