@@ -107,6 +107,8 @@ pub enum AsmErrKind {
     OverlappingBlocks,
     /// Creating the offset to replace a label caused overflow (pass 2).
     OffsetNewErr(OffsetNewErr),
+    /// Cannot find the offset with an external label (pass 2).
+    OffsetExternal,
     /// Label did not have an assigned address (pass 2).
     CouldNotFindLabel,
 }
@@ -123,6 +125,7 @@ impl std::fmt::Display for AsmErrKind {
             Self::BlockInIO         => f.write_str("cannot write code into memory-mapped IO region"),
             Self::OverlappingBlocks => f.write_str("regions overlap in memory"),
             Self::OffsetNewErr(e)   => e.fmt(f),
+            Self::OffsetExternal    => f.write_str("cannot use external label here"),
             Self::CouldNotFindLabel => f.write_str("label could not be found"),
         }
     }
@@ -172,6 +175,7 @@ impl crate::err::Error for AsmErr {
             AsmErrKind::WrappingBlock     => Some("user code typically starts at x3000 and is short enough to not wrap memory".into()),
             AsmErrKind::BlockInIO         => Some("try not doing that".into()),
             AsmErrKind::OffsetNewErr(e)   => e.help(),
+            AsmErrKind::OffsetExternal    => Some("external labels cannot be an offset operand; try creating a .fill LABEL directive".into()),
             AsmErrKind::CouldNotFindLabel => Some("try adding this label before an instruction or directive".into()),
         }
     }
@@ -429,7 +433,8 @@ impl From<String> for SourceInfo {
 #[derive(PartialEq, Eq, Clone, Copy, Default)]
 struct SymbolData {
     addr: u16,
-    src_start: usize
+    src_start: usize,
+    external: bool
 }
 impl SymbolData {
     /// Calculates the source range of this symbol, given the name of the label.
@@ -454,6 +459,24 @@ impl DebugSymbols {
 
     pub fn rev_lookup_line(&self, addr: u16) -> Option<usize> {
         self.line_map.find(addr)
+    }
+
+    /// Links debug symbols.
+    pub fn link(mut a: Self, b: Self) -> Result<Self, AsmErr> {
+        // TODO: This kinda just tacks files together into a single source.
+        // Once object files have support for multiple ASM references, this should be cleaner.
+
+        let lines = a.src_info.count_lines();
+
+        // B doesn't overlap with A because ObjectFile check
+        a.line_map.0.extend({
+            b.line_map.0.into_iter()
+                .map(|(k, v)| (k + lines, v))
+        });
+
+        a.src_info = SourceInfo::from_string(a.src_info.src + "\n" + &b.src_info.src);
+
+        Ok(a)
     }
 }
 /// The symbol table created in the first assembler pass
@@ -490,6 +513,9 @@ impl DebugSymbols {
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, SymbolData>,
+
+    /// Relocation table.
+    rel_map: HashMap<u16, String>,
 
     /// Debug symbols. If None, there were no debug symbols provided.
     debug_symbols: Option<DebugSymbols>,
@@ -567,16 +593,21 @@ impl SymbolTable {
         fn add_label(
             labels: &mut HashMap<String, SymbolData>, 
             label: &crate::ast::Label, 
-            addr: u16
+            addr: u16,
+            external: bool
         ) -> Result<(), AsmErr> {
             match labels.entry(label.name.to_uppercase()) {
-                Entry::Occupied(e) => {
+                // Two labels with different addresses. Conflict.
+                Entry::Occupied(e) if e.get().addr != addr => {
                     let span1 = e.get().span(e.key());
                     let span2 = label.span();
                     Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1, span2]))
                 },
+                // Two labels with same address. No conflict.
+                Entry::Occupied(_) => Ok(()),
+                // New label.
                 Entry::Vacant(e) => {
-                    e.insert(SymbolData { addr, src_start: label.span().start });
+                    e.insert(SymbolData { addr, src_start: label.span().start, external });
                     Ok(())
                 }
             }
@@ -584,6 +615,7 @@ impl SymbolTable {
 
         let mut cursor: Option<Cursor> = None;
         let mut label_map: HashMap<String, SymbolData> = HashMap::new();
+        let mut rel_map = HashMap::new();
         let mut debug_sym = src.map(|s| {
             let src_info = SourceInfo::new(s);
             (vec![None; src_info.count_lines()], src_info)
@@ -604,7 +636,7 @@ impl SymbolTable {
 
                 // Add labels
                 for label in &stmt.labels {
-                    add_label(&mut label_map, label, cur.lc)?;
+                    add_label(&mut label_map, label, cur.lc, false)?;
                 }
             }
 
@@ -619,16 +651,17 @@ impl SymbolTable {
                     None    => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone())),
                 },
                 StmtKind::Directive(Directive::External(label)) => {
-                    add_label(&mut label_map, label, 0)?;
+                    // Arbitrarily chose 0 as a placeholder for externals
+                    add_label(&mut label_map, label, 0, true)?;
                 }
                 StmtKind::Directive(Directive::Fill(PCOffset::Label(label))) => {
                     let label_text = label.name.to_uppercase();
-                    if let Some(SymbolData { addr, src_start: _ }) = label_map.get_mut(&label_text) {
+                    if let Some(SymbolData { external: true, .. }) = label_map.get(&label_text) {
                         let Some(cur) = cursor.as_ref() else {
                             return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span.clone()));
                         };
 
-                        *addr = cur.lc;
+                        rel_map.insert(cur.lc, label_text);
                     }
                 },
                 _ => {}
@@ -666,7 +699,7 @@ impl SymbolTable {
             src_info,
         });
 
-        Ok(SymbolTable { label_map, debug_symbols })
+        Ok(SymbolTable { label_map, rel_map, debug_symbols })
     }
 
     /// Gets the memory address of a given label (if it exists).
@@ -857,11 +890,11 @@ impl SymbolTable {
     pub fn source_info(&self) -> Option<&SourceInfo> {
         self.debug_symbols.as_ref().map(|ds| &ds.src_info)
     }
-
+    
     /// Gets an iterable of the mapping from labels to addresses.
-    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
+    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16, bool)> + '_ {
         self.label_map.iter()
-            .map(|(label, sym_data)| (&**label, sym_data.addr))
+            .map(|(label, sym_data)| (&**label, sym_data.addr, sym_data.external))
     }
 
     /// Gets an iterable of the mapping from lines to addresses.
@@ -906,9 +939,15 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, pc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.lookup_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
-            IOffset::new(loc.wrapping_sub(pc) as i16)
-                .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
+            // TODO: use sym.lookup_label
+            match sym.label_map.get(&label.name.to_uppercase()) {
+                Some(SymbolData { external: true, .. }) => Err(AsmErr::new(AsmErrKind::OffsetExternal, label.span())),
+                Some(SymbolData { addr, .. }) => {
+                    IOffset::new(addr.wrapping_sub(pc) as i16)
+                        .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
+                }
+                None => Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())),
+            }
         },
     }
 }
@@ -995,6 +1034,11 @@ pub struct ObjectFile {
     sym: Option<SymbolTable>
 }
 impl ObjectFile {
+    /// Creates an empty object file.
+    pub fn empty() -> Self {
+        ObjectFile { block_map: BTreeMap::new(), sym: None }
+    }
+
     /// Creates a new object file from an assembly AST and a symbol table.
     fn new(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<Self, AsmErr> {
         /// A singular block which represents a singular region in an object file.
@@ -1137,6 +1181,118 @@ impl ObjectFile {
             sym: debug.then_some(sym),
         })
     }
+
+    /// Gets a mutable reference to the value at the given address if defined in the object file.
+    /// 
+    /// If the data is uninitialized, this returns `Some(None)`.
+    fn get_mut(&mut self, addr: u16) -> Option<&mut Option<u16>> {
+        let (&start, block) = self.block_map.range_mut(..=addr).next()?;
+        block.get_mut(addr.wrapping_sub(start) as usize)
+    }
+
+    /// Links two object files, combining them into one.
+    /// 
+    /// The linking algorithm is as follows:
+    /// - The list of regions in both object files are merged into one.
+    /// - Overlaps between regions are checked. If any are found, error.
+    /// - For every symbol in the symbol table, this is added to the new symbol table.
+    ///     - If any symbols appear more than once in different locations (and neither are external), error (duplicate labels).
+    ///     - If any symbols appear more than once in different locations (and one is external), pull out any relocation entries (from `.REL`) for the external and match them.
+    /// - Merge the remaining relocation table entries.
+    pub fn link(mut a_obj: Self, b_obj: Self) -> Result<Self, AsmErr> {
+        let Self { block_map, sym } = b_obj;
+
+        // TODOs:
+        // - Check if conflict checks can be unified with the same conflict checks in ObjectFile::new
+        // - See if it's possible to encapsulate symbol table's linking
+        a_obj.block_map.extend(block_map);
+
+        let first = a_obj.block_map.iter();
+        let mut second = a_obj.block_map.iter();
+        second.next();
+        if std::iter::zip(first, second).any(|((&a_st, a_bl), (&b_st, b_bl))| {
+            let ar = a_st .. (a_st + a_bl.len() as u16);
+            let br = b_st .. (b_st + b_bl.len() as u16);
+            ranges_overlap(ar, br)
+        }) {
+            return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, Vec::<ErrSpan>::new()));
+        }
+
+        // Merge symbol tables:
+        let mut relocations = vec![];
+        a_obj.sym = match (a_obj.sym, sym) {
+            // If we have both symbol tables:
+            (Some(mut a_sym), Some(b_sym)) => {
+                let SymbolTable { label_map, rel_map, debug_symbols } = b_sym;
+                a_sym.debug_symbols = match (a_sym.debug_symbols, debug_symbols) {
+                    (Some(ads), Some(bds)) => Some(DebugSymbols::link(ads, bds)?),
+                    (m_ads, b_ads) => m_ads.or(b_ads)
+                };
+
+                // Cannot overlap due to the above overlapping blocks invariant.
+                a_sym.rel_map.extend(rel_map);
+
+                // For every label in symbol table B:
+                for (label, sym_data) in label_map {
+                    match a_sym.label_map.entry(label) {
+                        Entry::Occupied(mut e) => {
+                            let &SymbolData { addr: addr1, src_start: _, external: ext1 } = e.get();
+                            let &SymbolData { addr: addr2, src_start: _, external: ext2 } = &sym_data;
+
+                            match (ext1, ext2) {
+                                // Two external labels
+                                // Rel map entries are preserved, nothing changes.
+                                (true, true) => {},
+
+                                // One external label
+                                // Bind all of the RELs corresponding to the external symbol 
+                                // to the linked symbol
+                                (true, false) | (false, true) => {
+                                    // The address to link to.
+                                    let linked_sym = if ext1 { sym_data } else { *e.get() };
+                                    e.insert(linked_sym);
+
+                                    // Split the relocation map to unmatching & matching labels.
+                                    let rel_addrs;
+                                    (rel_addrs, a_sym.rel_map) = a_sym.rel_map.into_iter()
+                                        .partition(|(_, v)| v == e.key());
+
+                                    // Add matching labels to the "to relocate later" Vec.
+                                    relocations.extend({
+                                        rel_addrs.into_keys().map(|addr| (addr, linked_sym.addr))
+                                    });
+                                },
+
+                                // No external labels
+                                // If they point to the same addresses, nothing changes.
+                                // If they point to different addresses, raise conflict.
+                                (false, false) => if addr1 != addr2 {
+                                    let a_span = e.get().span(e.key());
+                                    let b_span = sym_data.span(e.key());
+                
+                                    // TODO: this error does not have correct spans.
+                                    return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [a_span, b_span]));
+                                }
+                            }
+                        },
+                        Entry::Vacant(e) => { e.insert(sym_data); },
+                    };
+                }
+                Some(a_sym)
+            },
+            (ma, mb) => ma.or(mb)
+        };
+        for (addr, linked_addr) in relocations {
+            // TODO: handle case where the address needed is not found
+            // should really only occur from invalid manipulation of obj file
+            a_obj.get_mut(addr)
+                .unwrap_or_else(|| unreachable!("object file should have had address {addr} bound"))
+                .replace(linked_addr);
+        }
+
+        Ok(a_obj)
+    }
+
     /// Get an iterator over all of the blocks of the object file.
     pub(crate) fn block_iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
         self.block_map.iter()

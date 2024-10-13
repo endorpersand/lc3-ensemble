@@ -829,6 +829,8 @@ impl Simulator {
 
         alloca.sort_by_key(|&(start, _)| start);
         self.alloca = alloca.into_boxed_slice();
+
+        // TODO: Fail on external label present.
     }
 
     /// Sets the condition codes using the provided result.

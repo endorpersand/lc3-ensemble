@@ -54,6 +54,7 @@ impl ObjFileFormat for BinaryFormat {
         // - 0x01: label symbol table entry
         // - 0x02: line symbol table entry
         // - 0x03: source code information
+        // - 0x04: relocation map entry
         //
         // Block 0x00 consists of:
         // - the identifier byte 0x00 (1 byte)
@@ -66,6 +67,7 @@ impl ObjFileFormat for BinaryFormat {
         // Block 0x01 consists of:
         // - the identifier byte 0x01 (1 byte)
         // - address of the label (2 bytes)
+        // - whether the label is external (1 byte)
         // - the start of the label in source (8 bytes)
         // - the length of the label's name (8 bytes)
         // - the label (n bytes)
@@ -79,7 +81,13 @@ impl ObjFileFormat for BinaryFormat {
         // Block 0x03 consists of:
         // - the identifier byte 0x03 (1 byte)
         // - the length of the source code (8 bytes)
-        // the source code (n bytes)
+        // - the source code (n bytes)
+        //
+        // Block 0x04 consists of:
+        // - the identifier byte 0x04 (1 byte)
+        // - the address to replace at (2 bytes)
+        // - the length of the label's name (8 bytes)
+        // - the label (n bytes)
 
         let mut bytes = BFMT_MAGIC.to_vec();
         bytes.extend_from_slice(BFMT_VER);
@@ -99,9 +107,10 @@ impl ObjFileFormat for BinaryFormat {
         }
 
         if let Some(sym) = &o.sym {
-            for (label, &super::SymbolData { addr, src_start }) in sym.label_map.iter() {
+            for (label, &super::SymbolData { addr, src_start, external }) in sym.label_map.iter() {
                 bytes.push(0x01);
                 bytes.extend(u16::to_le_bytes(addr));
+                bytes.push(u8::from(external));
                 bytes.extend(u64::to_le_bytes(src_start as u64));
                 bytes.extend(u64::to_le_bytes(label.len() as u64));
                 bytes.extend_from_slice(label.as_bytes());
@@ -122,6 +131,13 @@ impl ObjFileFormat for BinaryFormat {
                 bytes.extend(u64::to_le_bytes(src.len() as u64));
                 bytes.extend_from_slice(src.as_bytes());
             }
+
+            for (&addr, label) in &sym.rel_map {
+                bytes.push(0x04);
+                bytes.extend(u16::to_be_bytes(addr));
+                bytes.extend(u64::to_le_bytes(label.len() as u64));
+                bytes.extend_from_slice(label.as_bytes());
+            }
         }
 
         bytes
@@ -130,6 +146,7 @@ impl ObjFileFormat for BinaryFormat {
     fn deserialize(mut vec: &Self::Stream) -> Option<ObjectFile> {
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::new();
+        let mut rel_map    = HashMap::new();
         let mut debug_sym  = None::<(BTreeMap<_, _>, String)>;
 
         vec = vec.strip_prefix(BFMT_MAGIC)?
@@ -150,11 +167,12 @@ impl ObjFileFormat for BinaryFormat {
                 },
                 0x01 => {
                     let addr      = u16::from_le_bytes(take::<2>(&mut vec)?);
+                    let external  = u8::from_le_bytes(take::<1>(&mut vec)?) != 0;
                     let src_start = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let str_len   = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let string    = String::from_utf8(take_slice(&mut vec, str_len)?.to_vec()).ok()?;
 
-                    label_map.insert(string, SymbolData { addr, src_start });
+                    label_map.insert(string, SymbolData { addr, src_start, external });
                 },
                 0x02 => {
                     let (line_map, _) = debug_sym.get_or_insert_with(Default::default);
@@ -174,7 +192,14 @@ impl ObjFileFormat for BinaryFormat {
                     let src_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let obj_src = std::str::from_utf8(take_slice(&mut vec, src_len)?).ok()?;
                     src.push_str(obj_src);
-                }
+                },
+                0x04 => {
+                    let addr = u16::from_le_bytes(take::<2>(&mut vec)?);
+                    let label_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
+                    let label = String::from_utf8(take_slice(&mut vec, label_len)?.to_vec()).ok()?;
+
+                    rel_map.insert(addr, label);
+                },
                 _ => return None
             }
         }
@@ -188,7 +213,7 @@ impl ObjFileFormat for BinaryFormat {
             None => None,
         };
         let sym = (!label_map.is_empty() || debug_symbols.is_some())
-            .then_some(SymbolTable { label_map, debug_symbols });
+            .then_some(SymbolTable { label_map, debug_symbols, rel_map });
         Some(ObjectFile {
             block_map,
             sym,
@@ -248,11 +273,18 @@ impl ObjFileFormat for TextFormat {
         // <...>
         //
         // .SYMBOL
-        // ADDR | EXTERNAL | LABEL
-        // 0000 | 0        | FOO  
-        // 0001 | 0        | BAR  
+        // ADDR | EXT | LABEL
+        // 0000 |   0 | FOO  
+        // 0001 |   0 | BAR  
+        // 0002 |   1 | BAZ  
         // ...
         //
+        // .REL
+        // ADDR | LABEL
+        // 0002 | BAZ
+        // 0003 | BAZ
+        // 0005 | BAZ
+        // 
         // .DEBUG
         // LABEL | INDEX
         // FOO   | 35
@@ -290,13 +322,28 @@ impl ObjFileFormat for TextFormat {
             if let Some(sym) = &o.sym {
                 writeln!(buf, ".SYMBOL")?;
                 if !sym.label_map.is_empty() {
-                    writeln!(buf, "ADDR{0}LABEL", TABLE_DIV)?;
-                    for (label, addr) in sym.label_iter() {
-                        writeln!(buf, "{addr:04X}{0}{label}", TABLE_DIV)?;
+                    let mut sym_entries: Vec<_> = sym.label_iter().collect();
+                    sym_entries.sort_by_key(|&(name, addr, ext)| (addr, name, ext));
+
+                    writeln!(buf, "ADDR{0}EXT{0}LABEL", TABLE_DIV)?;
+                    for (label, addr, external) in sym_entries {
+                        writeln!(buf, "{addr:04X}{0}{1:3}{0}{label}", TABLE_DIV, u8::from(external))?;
                     }
                 }
                 writeln!(buf)?;
                 
+                writeln!(buf, ".REL")?;
+                if !sym.rel_map.is_empty() {
+                    let mut rel_entries: Vec<_> = sym.rel_map.iter().collect();
+                    rel_entries.sort_by_key(|&(&addr, label)| (addr, label));
+
+                    writeln!(buf, "ADDR{0}LABEL", TABLE_DIV)?;
+                    for (addr, label) in rel_entries {
+                        writeln!(buf, "{addr:04X}{0}{label}", TABLE_DIV)?;
+                    }
+                }
+                writeln!(buf)?;
+
                 writeln!(buf, ".DEBUG")?;
                 writeln!(buf, "// DEBUG SYMBOLS FOR LC3TOOLS")?;
                 writeln!(buf)?;
@@ -388,6 +435,7 @@ impl ObjFileFormat for TextFormat {
 
         let mut block_map  = BTreeMap::new();
         let mut label_map  = HashMap::<_, SymbolData>::new();
+        let mut rel_map    = HashMap::new();
         let mut debug_sym  = None::<(Vec<_>, String)>;
 
         // Read all of the non-empty lines:
@@ -429,15 +477,27 @@ impl ObjFileFormat for TextFormat {
                     }
                 },
                 ".SYMBOL" => {
-                    let table = parse_table(rest, ["ADDR", "LABEL"], |[addr_hex, label], _| {
+                    let table = parse_table(rest, ["ADDR", "EXT", "LABEL"], |[addr_hex, ext, label], _| {
                         let addr = hex2u16(addr_hex)?;
-                        Some((addr, label))
+                        let ext = ext.parse::<u8>().ok()? != 0;
+                        Some((addr, ext, label))
                     }, true)?;
 
-                    for (addr, label) in table {
+                    for (addr, ext, label) in table {
                         // TODO: what happens if .SYMBOL label + .DEBUG label mismatch
-                        label_map.entry(label.to_string()).or_default().addr = addr;
+                        let entry = label_map.entry(label.to_string()).or_default();
+                        
+                        entry.addr = addr;
+                        entry.external = ext;
                     }
+                },
+                ".REL" => {
+                    let table = parse_table(rest, ["ADDR", "LABEL"], |[addr_hex, label], _| {
+                        let addr = hex2u16(addr_hex)?;
+                        Some((addr, label.to_string()))
+                    }, true)?;
+
+                    rel_map.extend(table);
                 },
                 ".DEBUG" => if !rest.is_empty() {
                     let split_pos = rest.iter().position(|l| l.starts_with('='))?;
@@ -486,7 +546,7 @@ impl ObjFileFormat for TextFormat {
             None => None,
         };
         let sym = (!label_map.is_empty() || debug_symbols.is_some())
-            .then_some(SymbolTable { label_map, debug_symbols });
+            .then_some(SymbolTable { label_map, debug_symbols, rel_map });
         Some(ObjectFile {
             block_map,
             sym,
