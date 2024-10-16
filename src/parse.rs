@@ -658,9 +658,10 @@ impl Parse for Directive {
                 Ok(Self::Stringz(s))
             }
             "END" => Ok(Self::End),
+            "EXTERNAL" => Ok(Self::External(parser.parse()?)),
             _ => Err({
                 ParseErr::new("invalid directive", cursor)
-                    .with_help("the valid directives are .orig, .fill, .blkw, .stringz, .end")
+                    .with_help("the valid directives are .orig, .fill, .blkw, .stringz, .end, .external")
             })
         }
     }

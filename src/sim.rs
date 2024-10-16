@@ -809,7 +809,7 @@ impl Simulator {
 
         let mut alloca = vec![];
 
-        for (start, words) in obj.iter() {
+        for (start, words) in obj.block_iter() {
             self.mem.copy_obj_block(start, words);
 
             // add this block to alloca
@@ -829,6 +829,8 @@ impl Simulator {
 
         alloca.sort_by_key(|&(start, _)| start);
         self.alloca = alloca.into_boxed_slice();
+
+        // TODO: Fail on external label present.
     }
 
     /// Sets the condition codes using the provided result.
