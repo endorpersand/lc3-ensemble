@@ -308,6 +308,8 @@ pub enum SimErr {
     PrivilegeViolation,
     /// A supervisor region was accessed in user mode.
     AccessViolation,
+    /// Object file contained unresolved external symbols.
+    UnresolvedExternal(String),
     /// Interrupt raised.
     Interrupt(ExternalInterrupt),
     /// A register was loaded with a partially uninitialized value.
@@ -347,20 +349,21 @@ pub enum SimErr {
 impl std::fmt::Display for SimErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SimErr::IllegalOpcode       => f.write_str("simulator executed illegal opcode"),
-            SimErr::InvalidInstrFormat  => f.write_str("simulator executed invalid instruction"),
-            SimErr::PrivilegeViolation  => f.write_str("privilege violation"),
-            SimErr::AccessViolation     => f.write_str("access violation"),
-            SimErr::Interrupt(e)        => write!(f, "unhandled interrupt: {e}"),
-            SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
-            SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
-            SimErr::StrictIOSetUninit   => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
-            SimErr::StrictJmpAddrUninit => f.write_str("PC address was set to uninitialized address (strict mode)"),
-            SimErr::StrictSRAddrUninit  => f.write_str("Subroutine starts at uninitialized address (strict mode)"),
-            SimErr::StrictMemAddrUninit => f.write_str("tried to access memory with an uninitialized address (strict mode)"),
-            SimErr::StrictPCCurrUninit  => f.write_str("PC is pointing to uninitialized value (strict mode)"),
-            SimErr::StrictPCNextUninit  => f.write_str("PC will point to uninitialized value when this instruction executes (strict mode)"),
-            SimErr::StrictPSRSetUninit  => f.write_str("tried to set the PSR to an uninitialized value (strict mode)"),
+            SimErr::IllegalOpcode         => f.write_str("simulator executed illegal opcode"),
+            SimErr::InvalidInstrFormat    => f.write_str("simulator executed invalid instruction"),
+            SimErr::PrivilegeViolation    => f.write_str("privilege violation"),
+            SimErr::AccessViolation       => f.write_str("access violation"),
+            SimErr::UnresolvedExternal(s) => write!(f, "unresolved external label {s} in object file"),
+            SimErr::Interrupt(e)          => write!(f, "unhandled interrupt: {e}"),
+            SimErr::StrictRegSetUninit    => f.write_str("register was set to uninitialized value (strict mode)"),
+            SimErr::StrictMemSetUninit    => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
+            SimErr::StrictIOSetUninit     => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
+            SimErr::StrictJmpAddrUninit   => f.write_str("PC address was set to uninitialized address (strict mode)"),
+            SimErr::StrictSRAddrUninit    => f.write_str("Subroutine starts at uninitialized address (strict mode)"),
+            SimErr::StrictMemAddrUninit   => f.write_str("tried to access memory with an uninitialized address (strict mode)"),
+            SimErr::StrictPCCurrUninit    => f.write_str("PC is pointing to uninitialized value (strict mode)"),
+            SimErr::StrictPCNextUninit    => f.write_str("PC will point to uninitialized value when this instruction executes (strict mode)"),
+            SimErr::StrictPSRSetUninit    => f.write_str("tried to set the PSR to an uninitialized value (strict mode)"),
         }
     }
 }
@@ -686,7 +689,8 @@ impl Simulator {
     /// To initialize the IO, use [`Simulator::open_io`].
     fn load_os(&mut self) {
         if !self.os_loaded {
-            self.load_obj_file(_os_obj_file());
+            self.load_obj_file(_os_obj_file())
+                .unwrap_or_else(|_| unreachable!("OS object file should not have externals"));
             self.os_loaded = true;
         }
     }
@@ -804,8 +808,13 @@ impl Simulator {
     }
 
     /// Loads an object file into this simulator.
-    pub fn load_obj_file(&mut self, obj: &ObjectFile) {
+    pub fn load_obj_file(&mut self, obj: &ObjectFile) -> Result<(), SimErr> {
         use std::cmp::Ordering;
+
+        // Reject any object files with external symbols.
+        if let Some(ext) = obj.get_external_symbol() {
+            return Err(SimErr::UnresolvedExternal(ext.to_string()));
+        }
 
         let mut alloca = vec![];
 
@@ -830,7 +839,7 @@ impl Simulator {
         alloca.sort_by_key(|&(start, _)| start);
         self.alloca = alloca.into_boxed_slice();
 
-        // TODO: Fail on external label present.
+        Ok(())
     }
 
     /// Sets the condition codes using the provided result.

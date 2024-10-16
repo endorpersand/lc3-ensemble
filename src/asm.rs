@@ -1298,7 +1298,12 @@ impl ObjectFile {
         self.block_map.iter()
             .map(|(&addr, block)| (addr, block.as_slice()))
     }
-    
+    /// Checks if object file has any external symbols.
+    pub(crate) fn get_external_symbol(&self) -> Option<&str> {
+        self.symbol_table()
+            .and_then(|s| s.label_map.iter().find(|(_, s)| s.external))
+            .map(|(k, _)| k.as_str())
+    }
     /// Gets an iterator over all of the memory locations defined in the object file.
     pub fn addr_iter(&self) -> impl Iterator<Item=(u16, Option<u16>)> + '_ {
         self.block_iter()
