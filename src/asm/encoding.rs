@@ -279,7 +279,7 @@ impl ObjFileFormat for TextFormat {
         // 0002 |   1 | BAZ  
         // ...
         //
-        // .REL
+        // .LINKER_INFO
         // ADDR | LABEL
         // 0002 | BAZ
         // 0003 | BAZ
@@ -332,7 +332,7 @@ impl ObjFileFormat for TextFormat {
                 }
                 writeln!(buf)?;
                 
-                writeln!(buf, ".REL")?;
+                writeln!(buf, ".LINKER_INFO")?;
                 if !sym.rel_map.is_empty() {
                     let mut rel_entries: Vec<_> = sym.rel_map.iter().collect();
                     rel_entries.sort_by_key(|&(&addr, label)| (addr, label));
@@ -491,7 +491,7 @@ impl ObjFileFormat for TextFormat {
                         entry.external = ext;
                     }
                 },
-                ".REL" => {
+                ".LINKER_INFO" => {
                     let table = parse_table(rest, ["ADDR", "LABEL"], |[addr_hex, label], _| {
                         let addr = hex2u16(addr_hex)?;
                         Some((addr, label.to_string()))

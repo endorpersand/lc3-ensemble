@@ -1197,7 +1197,7 @@ impl ObjectFile {
     /// - Overlaps between regions are checked. If any are found, error.
     /// - For every symbol in the symbol table, this is added to the new symbol table.
     ///     - If any symbols appear more than once in different locations (and neither are external), error (duplicate labels).
-    ///     - If any symbols appear more than once in different locations (and one is external), pull out any relocation entries (from `.REL`) for the external and match them.
+    ///     - If any symbols appear more than once in different locations (and one is external), pull out any relocation entries (from `.LINKER_INFO`) for the external and match them.
     /// - Merge the remaining relocation table entries.
     pub fn link(mut a_obj: Self, b_obj: Self) -> Result<Self, AsmErr> {
         let Self { block_map, sym } = b_obj;
@@ -1245,7 +1245,7 @@ impl ObjectFile {
                                 (true, true) => {},
 
                                 // One external label
-                                // Bind all of the RELs corresponding to the external symbol 
+                                // Bind all of the relocation entries corresponding to the external symbol 
                                 // to the linked symbol
                                 (true, false) | (false, true) => {
                                     // The address to link to.
