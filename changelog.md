@@ -1,3 +1,7 @@
+# 0.9.0 (October 16, 2024)
+
+- Breaking change: Make `Simulator::load_obj_file` fallible (when it loads an object file with external label)
+
 # 0.8.1 (October 16, 2024)
 
 - Rename `.REL` in text format to `.LINKER_INFO`
