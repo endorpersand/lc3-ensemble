@@ -1,3 +1,7 @@
+# 0.8.1 (October 16, 2024)
+
+- Rename `.REL` in text format to `.LINKER_INFO`
+
 # 0.8.0 (October 15, 2024)
 
 - Removed `Parse` for `u16` and `i16` (introduced in `0.7.2` to fix `.fill -32` bug) in favor for `parse::simple::IntLiteral`
