@@ -1205,7 +1205,24 @@ impl ObjectFile {
         // TODOs:
         // - Check if conflict checks can be unified with the same conflict checks in ObjectFile::new
         // - See if it's possible to encapsulate symbol table's linking
-        a_obj.block_map.extend(block_map);
+        for (addr, block) in block_map {
+            match a_obj.block_map.entry(addr) {
+                std::collections::btree_map::Entry::Vacant(e) => { e.insert(block); },
+                std::collections::btree_map::Entry::Occupied(mut e) => {
+                    // If they overlap completely, accept the merge
+                    // Otherwise, raise an overlap error
+                    match std::iter::zip(e.get(), &block).all(|(a, b)| a == b) {
+                        true  => {
+                            if block.len() > e.get().len() {
+                                e.insert(block);
+                            }
+                        },
+                        false => return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, Vec::<ErrSpan>::new())),
+                    }
+                    
+                },
+            }
+        }
 
         let first = a_obj.block_map.iter();
         let mut second = a_obj.block_map.iter();
