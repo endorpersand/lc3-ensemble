@@ -1,3 +1,7 @@
+# 0.9.1 (October 17, 2024)
+
+- Fix bug where overlapping blocks would not be detected during link if there was a matching block location in both files.
+
 # 0.9.0 (October 16, 2024)
 
 - Breaking change: Make `Simulator::load_obj_file` fallible (when it loads an object file with external label)
