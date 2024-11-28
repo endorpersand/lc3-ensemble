@@ -30,6 +30,8 @@ pub enum Token {
     /// A signed numeric value (e.g., `-9`, `#-14`, `x-7F`, etc.)
     #[regex(r"-\w*", lex_signed_dec)]
     #[regex(r"#-\w*", lex_signed_dec)]
+    #[regex(r"-#+\w*", lex_signed_dec)] // always errors
+    #[regex(r"##+-?\w*", lex_signed_dec)] // always errors
     #[regex(r"[Xx]-\w*", lex_signed_hex)]
     Signed(i16),
 
@@ -48,7 +50,7 @@ pub enum Token {
     Ident(Ident),
 
     /// A directive (e.g., `.orig`, `.end`).
-    #[regex(r"\.[A-Za-z_]\w*", |lx| lx.slice()[1..].to_string())]
+    #[regex(r"\.\w*", |lx| lx.slice()[1..].to_string())]
     Directive(String),
 
     /// A string literal (e.g., `"Hello!"`)
@@ -142,7 +144,7 @@ pub enum LexErr {
     UnknownIntErr,
     /// String literal is missing an end quotation mark.
     UnclosedStrLit,
-    /// String literal is missing an end quotation mark.
+    /// String literal is larger than the maximum string size (u16::MAX - 1).
     StrLitTooBig,
     /// Token had the format R\d, but \d isn't 0-7.
     InvalidReg,
@@ -249,50 +251,52 @@ fn lex_str_literal(lx: &mut Lexer<'_, Token>) -> Result<String, LexErr> {
         .next()
         .unwrap_or("");
 
-    // calculate the length of the string literal ignoring the quotes
-    // consume tokens up to the end of the literal and including the unescaped quote
-    let mlen = rem.match_indices('"')
-        .map(|(n, _)| n)
-        .find(|&n| !matches!(rem.get((n - 1)..(n + 1)), Some("\\\"")));
-    
-    match mlen {
-        Some(len) => lx.bump(len + 1),
-        None => {
-            lx.bump(rem.len());
-            return Err(LexErr::UnclosedStrLit);
-        }
-    }
-
-    // get the string inside quotes:
-    let mut remaining = &lx.slice()[1..(lx.slice().len() - 1)];
-    let mut buf = String::with_capacity(remaining.len());
-
-    // Look for escapes. Only a simple group of escapes are implemented.
-    // (e.g., `\n`, `\r`, etc.)
-    while let Some((left, right)) = remaining.split_once('\\') {
-        buf.push_str(left);
-
-        // this character is part of the escape:
-        let esc = right.as_bytes()
-            .first()
-            .unwrap_or_else(|| unreachable!("expected character after escape")); // there always has to be one, cause last character is not \
-        match esc {
-            b'n'  => buf.push('\n'),
-            b'r'  => buf.push('\r'),
-            b't'  => buf.push('\t'),
-            b'\\' => buf.push('\\'),
-            b'0'  => buf.push('\0'),
-            b'"'  => buf.push('\"'),
-            &c => {
-                buf.push('\\');
-                buf.push(char::from(c));
-            }
-        }
+    let mut buf = String::new();
+    let mut done = false;
+    let mut remaining = rem;
+    while let Some(i) = remaining.find(['\\', '"']) {
+        let left = &remaining[..i];
+        let mid = &remaining[i..i+1];
+        let right = &remaining[i+1..];
         
-        remaining = &right[1..];
+        buf.push_str(left);
+        match mid {
+            "\\" => {
+                // the next character is part of the escape:
+                let esc = right.as_bytes()
+                    .first()
+                    .unwrap_or_else(|| unreachable!("expected character after escape")); // there always has to be one, cause last character is not \
+                match esc {
+                    b'n'  => buf.push('\n'),
+                    b'r'  => buf.push('\r'),
+                    b't'  => buf.push('\t'),
+                    b'\\' => buf.push('\\'),
+                    b'0'  => buf.push('\0'),
+                    b'"'  => buf.push('\"'),
+                    &c => {
+                        buf.push('\\');
+                        buf.push(char::from(c));
+                    }
+                }
+                
+                remaining = &right[1..];
+            },
+            "\"" => {
+                remaining = right;
+                done = true;
+                break
+            },
+            _ => unreachable!(r#"find loop should've matched '\' or '"'"#)
+        }
     }
-    buf.push_str(remaining);
-    
+
+    if !done {
+        lx.bump(rem.len());
+        return Err(LexErr::UnclosedStrLit);
+    }
+
+    lx.bump(rem.len() - remaining.len());
+
     match buf.len() < usize::from(u16::MAX) {
         true  => Ok(buf),
         false => Err(LexErr::StrLitTooBig),
