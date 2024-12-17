@@ -210,7 +210,7 @@ const IO_START: u16 = 0xFE00;
 ///     (this has to occur in a well-formed program because regions constitute contiguous, non-overlapping parts of memory).
 /// 
 /// If these invariants are not held, invalid behavior can occur.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 struct LineSymbolMap(BTreeMap<usize, Vec<u16>>);
 
 impl LineSymbolMap {
@@ -313,7 +313,7 @@ impl std::fmt::Debug for LineSymbolMap {
 }
 /// Struct holding the source string and contains helpers 
 /// to index lines and to query position information from a source string.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct SourceInfo {
     /// The source code.
     src: String,
@@ -444,7 +444,7 @@ impl SymbolData {
 }
 
 /// Debug symbols.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 struct DebugSymbols {
     /// A mapping from each line with a statement in the source to an address.
     line_map: LineSymbolMap,
@@ -509,7 +509,7 @@ impl DebugSymbols {
 /// text is available during simulation time:
 /// - Mappings from source code line numbers to memory addresses
 /// - Source code text (which grants access to line contents from a given line number; see [`SourceInfo`] for more details)
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     label_map: HashMap<String, SymbolData>,
@@ -1019,7 +1019,7 @@ impl Directive {
 /// 
 /// This is the final product after assembly source code is fully assembled.
 /// This can be loaded in the simulator to run the assembled code.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ObjectFile {
     /// A mapping of each block's address to its corresponding data.
     /// 
@@ -1360,6 +1360,39 @@ mod tests {
         let ast = parse_ast(src).unwrap();
         assemble_debug(ast, src)
     }
+    fn assert_asm_fail<T: std::fmt::Debug>(r: Result<T, AsmErr>, kind: AsmErrKind) {
+        assert_eq!(r.unwrap_err().kind, kind);
+    }
+
+    #[test]
+    fn test_sym_basic() {
+        let src = "
+        .orig x3000
+            A ADD R0, R0, #0
+            AND R0, R0, #1
+            C ADD R0, R0, #0
+            D LD R0, #-1
+            HALT
+            HALT
+            HALT
+            HALT
+            E BR C
+            HALT
+            HALT
+            HALT
+            B JSR A
+        .end
+        ";
+
+        let obj = assemble_src(src).unwrap();
+        let sym = obj.symbol_table().unwrap();
+        assert_eq!(sym.lookup_label("A"), Some(0x3000));
+        assert_eq!(sym.lookup_label("C"), Some(0x3002));
+        assert_eq!(sym.lookup_label("D"), Some(0x3003));
+        assert_eq!(sym.lookup_label("E"), Some(0x3008));
+        assert_eq!(sym.lookup_label("B"), Some(0x300C));
+    }
+
     #[test]
     fn test_region_overlap() {
         // Two orig blocks, one after another
@@ -1377,7 +1410,7 @@ mod tests {
         ";
 
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::OverlappingBlocks);
+        assert_asm_fail(obj, AsmErrKind::OverlappingBlocks);
 
         // Two orig blocks, one before another
         let src = "
@@ -1394,7 +1427,7 @@ mod tests {
         ";
 
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::OverlappingBlocks);
+        assert_asm_fail(obj, AsmErrKind::OverlappingBlocks);
 
         // Two orig blocks, one empty
         let src = "
@@ -1448,7 +1481,7 @@ mod tests {
             .end
         ";
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+        assert_asm_fail(obj, AsmErrKind::BlockInIO);
     }
 
     #[test]
@@ -1461,7 +1494,7 @@ mod tests {
         ";
 
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::WrappingBlock);
+        assert_asm_fail(obj, AsmErrKind::WrappingBlock);
 
         // Bunch of .fill:
         let mut src = String::from(".orig x0000\n");
@@ -1471,7 +1504,7 @@ mod tests {
         writeln!(src, ".end").unwrap();
 
         let obj = assemble_src(&src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+        assert_asm_fail(obj, AsmErrKind::BlockInIO);
 
         // perfectly aligns
         let src = "
@@ -1480,7 +1513,7 @@ mod tests {
             .end
         ";
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+        assert_asm_fail(obj, AsmErrKind::BlockInIO);
 
         // perfectly aligns 2
         let src = "
@@ -1489,7 +1522,7 @@ mod tests {
             .end
         ";
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::BlockInIO);
+        assert_asm_fail(obj, AsmErrKind::BlockInIO);
 
         // big BLKW
         let src = "
@@ -1500,7 +1533,7 @@ mod tests {
             .end
         ";
         let obj = assemble_src(src);
-        assert_eq!(obj.unwrap_err().kind, AsmErrKind::WrappingBlock);
+        assert_asm_fail(obj, AsmErrKind::WrappingBlock);
 
         // perfectly aligns and then does schenanigans
         let src = "
@@ -1519,30 +1552,31 @@ mod tests {
     #[test]
     fn test_ser_deser() {
         fn assert_obj_equal(deser: &mut ObjectFile, expected: &ObjectFile, m: &str) {
-            let ds = deser.sym.as_mut()
+            let deser_src = deser.sym.as_mut()
                 .and_then(|s| s.debug_symbols.as_mut())
                 .map(|s| &mut s.src_info.src)
                 .expect("deserialized object file has no source");
-            let es = expected.sym.as_ref()
+
+            let expected_src = expected.sym.as_ref()
                 .and_then(|s| s.debug_symbols.as_ref())
                 .map(|s| &s.src_info.src)
                 .expect("expected object file has no source");
 
-            let ll = ds.trim().lines().map(str::trim);
-            let rl = es.trim().lines().map(str::trim);
+            let deser_lines = deser_src.trim().lines().map(str::trim);
+            let expected_lines = expected_src.trim().lines().map(str::trim);
             
-            assert!(ll.eq(rl), "lines should have matched");
+            assert!(deser_lines.eq(expected_lines), "lines should have matched");
             
-            let mut buf = es.to_string();
-            std::mem::swap(ds, &mut buf);
+            let mut buf = expected_src.to_string();
+            std::mem::swap(deser_src, &mut buf);
             assert_eq!(deser, expected, "{m}");
 
             // Revert change
-            let ds = deser.sym.as_mut()
+            let deser_src = deser.sym.as_mut()
                 .and_then(|s| s.debug_symbols.as_mut())
                 .map(|s| &mut s.src_info.src)
                 .expect("deserialized object file has no source");
-            std::mem::swap(ds, &mut buf);
+            std::mem::swap(deser_src, &mut buf);
 
         }
 
@@ -1599,12 +1633,195 @@ mod tests {
         let lib_obj = assemble_src(library).unwrap();
         let prog_obj = assemble_src(program).unwrap();
         ObjectFile::link(lib_obj, prog_obj).unwrap();
+    }
+    #[test]
+    fn test_link_overlapping_labels() {
+        let library = "
+            .orig x5000
+                LOOP BR LOOP
+                RET
+            .end
+        ";
 
-        // TODO: Check... 
-        // - overlapping labels
-        // - overlapping blocks
-        // - linking two files with the same external
-        // - object file encoding w/ linkage
-        // - using external label in offset operand
+        let program = "
+            .orig x4000
+                LOOP BR LOOP
+                RET
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog_obj = assemble_src(program).unwrap();
+        let link_obj = ObjectFile::link(lib_obj, prog_obj);
+        assert_asm_fail(link_obj, AsmErrKind::OverlappingLabels);
+    }
+
+    #[test]
+    fn test_link_overlapping_blocks() {
+        // Overlapping blocks, but not identically overlapping
+        let library = "
+            .orig x3000
+                ADD R0, R0, #0
+                ADD R0, R0, #1
+                ADD R0, R0, #2
+                ADD R0, R0, #3
+            .end
+        ";
+
+        let program = "
+            .orig x3001
+                ADD R0, R0, #0
+                ADD R0, R0, #1
+                ADD R0, R0, #2
+                ADD R0, R0, #3
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog_obj = assemble_src(program).unwrap();
+        let link_obj = ObjectFile::link(lib_obj, prog_obj);
+        assert_asm_fail(link_obj, AsmErrKind::OverlappingBlocks);
+        
+        // Overlapping blocks and identically overlapping
+        let library = "
+            .orig x3000
+                ADD R0, R0, #0
+                ADD R0, R0, #1
+                ADD R0, R0, #2
+                ADD R0, R0, #3
+            .end
+        ";
+
+        let program = "
+            .orig x3000
+                ADD R0, R0, #0
+                ADD R0, R0, #1
+                ADD R0, R0, #2
+                ADD R0, R0, #3
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog_obj = assemble_src(program).unwrap();
+        let link_obj = ObjectFile::link(lib_obj, prog_obj);
+        assert_asm_fail(link_obj, AsmErrKind::OverlappingBlocks);
+        
+        // Contiguous blocks
+        let library = "
+            .orig x3000
+                ADD R0, R0, #0
+                ADD R0, R0, #1
+                ADD R0, R0, #2
+                ADD R0, R0, #3
+            .end
+        ";
+
+        let program = "
+            .orig x3004
+                ADD R0, R0, #4
+                ADD R0, R0, #5
+                ADD R0, R0, #6
+                ADD R0, R0, #7
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog_obj = assemble_src(program).unwrap();
+        ObjectFile::link(lib_obj, prog_obj).unwrap();
+    }
+
+    #[test]
+    fn test_link_order_agnostic() {
+        let library = "
+            .orig x5000
+                ;; very functional MULTIPLY subroutine
+                MULTIPLY RET
+            .end
+        ";
+        let program1 = "
+            .external MULTIPLY
+
+            .orig x3000
+                LD R1, MADDR1
+                JSRR R1
+                HALT
+
+                MADDR1 .fill MULTIPLY
+            .end
+        ";
+        let program2 = "
+            .external MULTIPLY
+
+            .orig x4000
+                LD R2, MADDR2
+                JSRR R2
+                HALT
+
+                MADDR2 .fill MULTIPLY
+            .end
+        ";
+
+        let lib_obj = assemble_src(library).unwrap();
+        let prog1_obj = assemble_src(program1).unwrap();
+        let prog2_obj = assemble_src(program2).unwrap();
+        
+        // (lib + prog1) + prog2:
+        let link_obj = ObjectFile::link(lib_obj.clone(), prog1_obj.clone()).unwrap();
+        ObjectFile::link(link_obj.clone(), prog2_obj.clone())
+            .expect("(lib + prog1) + prog2 should've succeeded");
+        // prog2 + (lib + prog1):
+        ObjectFile::link(prog2_obj.clone(), link_obj.clone())
+            .expect("prog2 + (lib + prog1) should've succeeded");
+        
+        // (prog1 + lib) + prog2:
+        let link_obj = ObjectFile::link(prog1_obj.clone(), lib_obj.clone()).unwrap();
+        ObjectFile::link(link_obj.clone(), prog2_obj.clone())
+            .expect("(prog1 + lib) + prog2 should've succeeded");
+        // prog2 + (prog1 + lib):
+        ObjectFile::link(prog2_obj.clone(), link_obj.clone())
+            .expect("prog2 + (prog1 + lib) should've succeeded");
+        
+        // (prog1 + prog2) + lib:
+        let link_obj = ObjectFile::link(prog1_obj.clone(), prog2_obj.clone()).unwrap();
+        ObjectFile::link(link_obj.clone(), lib_obj.clone())
+            .expect("(prog1 + prog2) + lib should've succeeded");
+        // lib + (prog1 + prog2):
+        ObjectFile::link(lib_obj.clone(), link_obj.clone())
+            .expect("lib + (prog1 + prog2) should've succeeded");
+    }
+
+    #[test]
+    fn test_link_external_place() {
+        let program = "
+            .external X
+            .orig x3000
+                .fill X
+            .end
+        ";
+        assemble_src(program).unwrap();
+
+        let program = "
+            .external X
+            .orig x3000
+                LD R0, X
+            .end
+        ";
+        assert_asm_fail(assemble_src(program), AsmErrKind::OffsetExternal);
+
+        let program = "
+            .external X
+            .orig x3000
+                JSR X
+            .end
+        ";
+        assert_asm_fail(assemble_src(program), AsmErrKind::OffsetExternal);
+
+        let program = "
+            .external X
+            .orig x3000
+                BR X
+            .end
+        ";
+        assert_asm_fail(assemble_src(program), AsmErrKind::OffsetExternal);
     }
 }
