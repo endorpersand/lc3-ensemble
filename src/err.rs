@@ -103,20 +103,26 @@ impl From<Span> for ErrSpan {
         ErrSpan::One(value)
     }
 }
-impl From<[Span; 2]> for ErrSpan {
-    fn from(value: [Span; 2]) -> Self {
-        ErrSpan::Two(value)
+impl From<&[Span]> for ErrSpan {
+    fn from(value: &[Span]) -> Self {
+        match value {
+            [r0] => ErrSpan::One(r0.clone()),
+            [r0, r1] => ErrSpan::Two([r0.clone(), r1.clone()]),
+            rr => ErrSpan::Many(rr.to_vec())
+        }
+    }
+}
+impl<const N: usize> From<[Span; N]> for ErrSpan {
+    fn from(value: [Span; N]) -> Self {
+        Self::from(value.as_slice())
     }
 }
 impl From<Vec<Span>> for ErrSpan {
     fn from(value: Vec<Span>) -> Self {
-        match Box::<[_; 1]>::try_from(value) {
-            Ok(rbox) => {
-                let [r] = *rbox;
-                ErrSpan::One(r)
-            },
-            Err(value) => match Box::try_from(value) {
-                Ok(rbox) => ErrSpan::Two(*rbox),
+        match <[_; 1]>::try_from(value) {
+            Ok([r]) => ErrSpan::One(r),
+            Err(value) => match <[_; 2]>::try_from(value) {
+                Ok(r2) => ErrSpan::Two(r2),
                 Err(value) => ErrSpan::Many(value)
             }
         }

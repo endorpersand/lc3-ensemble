@@ -430,7 +430,7 @@ impl From<String> for SourceInfo {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Default)]
+#[derive(PartialEq, Eq, Clone, Copy, Default, Debug)]
 struct SymbolData {
     addr: u16,
     src_start: usize,
@@ -1186,7 +1186,7 @@ impl ObjectFile {
     /// 
     /// If the data is uninitialized, this returns `Some(None)`.
     fn get_mut(&mut self, addr: u16) -> Option<&mut Option<u16>> {
-        let (&start, block) = self.block_map.range_mut(..=addr).next()?;
+        let (&start, block) = self.block_map.range_mut(..=addr).next_back()?;
         block.get_mut(addr.wrapping_sub(start) as usize)
     }
 
@@ -1200,27 +1200,11 @@ impl ObjectFile {
     ///     - If any symbols appear more than once in different locations (and one is external), pull out any relocation entries (from `.LINKER_INFO`) for the external and match them.
     /// - Merge the remaining relocation table entries.
     pub fn link(mut a_obj: Self, b_obj: Self) -> Result<Self, AsmErr> {
-        let Self { block_map, sym } = b_obj;
+        let Self { block_map: b_block_map, sym: b_sym } = b_obj;
 
-        // TODOs:
-        // - Check if conflict checks can be unified with the same conflict checks in ObjectFile::new
-        // - See if it's possible to encapsulate symbol table's linking
-        for (addr, block) in block_map {
-            match a_obj.block_map.entry(addr) {
-                std::collections::btree_map::Entry::Vacant(e) => { e.insert(block); },
-                std::collections::btree_map::Entry::Occupied(mut e) => {
-                    // If they overlap completely, accept the merge
-                    // Otherwise, raise an overlap error
-                    match std::iter::zip(e.get(), &block).all(|(a, b)| a == b) {
-                        true  => {
-                            if block.len() > e.get().len() {
-                                e.insert(block);
-                            }
-                        },
-                        false => return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, Vec::<ErrSpan>::new())),
-                    }
-                    
-                },
+        for (addr, block) in b_block_map {
+            if a_obj.block_map.insert(addr, block).is_some() {
+                return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, []));
             }
         }
 
@@ -1232,16 +1216,16 @@ impl ObjectFile {
             let br = b_st .. (b_st + b_bl.len() as u16);
             ranges_overlap(ar, br)
         }) {
-            return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, Vec::<ErrSpan>::new()));
+            return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, []));
         }
 
         // Merge symbol tables:
         let mut relocations = vec![];
-        a_obj.sym = match (a_obj.sym, sym) {
+        a_obj.sym = match (a_obj.sym, b_sym) {
             // If we have both symbol tables:
             (Some(mut a_sym), Some(b_sym)) => {
-                let SymbolTable { label_map, rel_map, debug_symbols } = b_sym;
-                a_sym.debug_symbols = match (a_sym.debug_symbols, debug_symbols) {
+                let SymbolTable { label_map, rel_map, debug_symbols: b_debug_symbols } = b_sym;
+                a_sym.debug_symbols = match (a_sym.debug_symbols, b_debug_symbols) {
                     (Some(ads), Some(bds)) => Some(DebugSymbols::link(ads, bds)?),
                     (m_ads, b_ads) => m_ads.or(b_ads)
                 };
@@ -1250,13 +1234,11 @@ impl ObjectFile {
                 a_sym.rel_map.extend(rel_map);
 
                 // For every label in symbol table B:
-                for (label, sym_data) in label_map {
+                for (label, b_sym_data) in label_map {
                     match a_sym.label_map.entry(label) {
                         Entry::Occupied(mut e) => {
-                            let &SymbolData { addr: addr1, src_start: _, external: ext1 } = e.get();
-                            let &SymbolData { addr: addr2, src_start: _, external: ext2 } = &sym_data;
-
-                            match (ext1, ext2) {
+                            let &a_sym_data = e.get();
+                            match (a_sym_data.external, b_sym_data.external) {
                                 // Two external labels
                                 // Rel map entries are preserved, nothing changes.
                                 (true, true) => {},
@@ -1266,13 +1248,16 @@ impl ObjectFile {
                                 // to the linked symbol
                                 (true, false) | (false, true) => {
                                     // The address to link to.
-                                    let linked_sym = if ext1 { sym_data } else { *e.get() };
+                                    let linked_sym = match a_sym_data.external {
+                                        true  => b_sym_data,
+                                        false => a_sym_data
+                                    };
                                     e.insert(linked_sym);
 
                                     // Split the relocation map to unmatching & matching labels.
-                                    let rel_addrs;
-                                    (rel_addrs, a_sym.rel_map) = a_sym.rel_map.into_iter()
+                                    let (rel_addrs, new_rel_map) = a_sym.rel_map.into_iter()
                                         .partition(|(_, v)| v == e.key());
+                                    a_sym.rel_map = new_rel_map;
 
                                     // Add matching labels to the "to relocate later" Vec.
                                     relocations.extend({
@@ -1283,16 +1268,16 @@ impl ObjectFile {
                                 // No external labels
                                 // If they point to the same addresses, nothing changes.
                                 // If they point to different addresses, raise conflict.
-                                (false, false) => if addr1 != addr2 {
-                                    let a_span = e.get().span(e.key());
-                                    let b_span = sym_data.span(e.key());
+                                (false, false) => if a_sym_data.addr != b_sym_data.addr {
+                                    let a_span = a_sym_data.span(e.key());
+                                    let b_span = b_sym_data.span(e.key());
                 
-                                    // TODO: this error does not have correct spans.
+                                    // TODO: this error does not have correct spans (since the files are different).
                                     return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [a_span, b_span]));
                                 }
                             }
                         },
-                        Entry::Vacant(e) => { e.insert(sym_data); },
+                        Entry::Vacant(e) => { e.insert(b_sym_data); },
                     };
                 }
                 Some(a_sym)
@@ -1300,10 +1285,10 @@ impl ObjectFile {
             (ma, mb) => ma.or(mb)
         };
         for (addr, linked_addr) in relocations {
-            // TODO: handle case where the address needed is not found
+            // TODO: handle case where the address needed is not found in block map
             // should really only occur from invalid manipulation of obj file
             a_obj.get_mut(addr)
-                .unwrap_or_else(|| unreachable!("object file should have had address {addr} bound"))
+                .unwrap_or_else(|| unreachable!("object file should have had address x{addr:04X} bound"))
                 .replace(linked_addr);
         }
 
