@@ -721,3 +721,295 @@ impl Parse for Stmt {
         Ok(Self { labels, nucleus, span })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::ast::asm::Stmt;
+    use crate::ast::{Label, Offset, Reg};
+
+    use super::{Comma, End, Parse, ParseErr, Parser};
+
+    #[test]
+    fn test_parser_basic() -> Result<(), ParseErr> {
+        let mut parser = Parser::new("XOR R0, R0, #0")?;
+        parser.parse::<Label>()?;
+        parser.parse::<Reg>()?;
+        parser.parse::<Comma>()?;
+        parser.parse::<Reg>()?;
+        parser.parse::<Comma>()?;
+        parser.parse::<Offset<i16, 6>>()?;
+        parser.parse::<End>()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_parser_end() -> Result<(), ParseErr> {
+        let mut parser = Parser::new("\
+        FOO
+        BAR
+        BAZ
+
+
+        ")?;
+
+        parser.parse::<Label>()?;
+        parser.parse::<End>()?;
+        parser.parse::<Label>()?;
+        parser.parse::<End>()?;
+        parser.parse::<Label>()?;
+        assert!(parser.is_empty(), "expected parser to be empty");
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        parser.parse::<End>()?;
+        Ok(())
+    }
+
+    fn parse_str<P: Parse>(s: &str) -> Result<P, ParseErr> {
+        let mut parser = Parser::new(s)?;
+        let result = parser.parse()?;
+        assert!(parser.is_empty(), "expected parser to be complete after parsing");
+        Ok(result)
+    }
+    fn assert_parse<P: Parse>(s: &str) {
+        if let Err(e) = parse_str::<P>(s) {
+            panic!("failed to parse {s:?}: {e:?}");
+        }
+    }
+    fn assert_parse_fail<P: Parse + std::fmt::Debug>(s: &str) {
+        if let Ok(ast) = parse_str::<P>(s) {
+            panic!("unexpectedly succeeded to parse {s:?}: {ast:?}");
+        }
+    }
+
+    #[test]
+    fn test_instrs_directives_basic() {
+        // ADD
+        assert_parse::<Stmt>("ADD R0, R1, R2");
+        assert_parse::<Stmt>("ADD R0, R1, #5");
+        // AND
+        assert_parse::<Stmt>("AND R0, R1, R2");
+        assert_parse::<Stmt>("AND R0, R1, #5");
+        // BR*
+        assert_parse::<Stmt>("BR #9");
+        assert_parse::<Stmt>("BRn #9");
+        assert_parse::<Stmt>("BRz #9");
+        assert_parse::<Stmt>("BRnz #9");
+        assert_parse::<Stmt>("BRp #9");
+        assert_parse::<Stmt>("BRnp #9");
+        assert_parse::<Stmt>("BRzp #9");
+        assert_parse::<Stmt>("BRnzp #9");
+        assert_parse::<Stmt>("BR LABEL");
+        assert_parse::<Stmt>("BRn LABEL");
+        assert_parse::<Stmt>("BRz LABEL");
+        assert_parse::<Stmt>("BRnz LABEL");
+        assert_parse::<Stmt>("BRp LABEL");
+        assert_parse::<Stmt>("BRnp LABEL");
+        assert_parse::<Stmt>("BRzp LABEL");
+        assert_parse::<Stmt>("BRnzp LABEL");
+        // JMP
+        assert_parse::<Stmt>("JMP R0");
+        // JSR
+        assert_parse::<Stmt>("JSR #11");
+        assert_parse::<Stmt>("JSR LABEL");
+        // JSRR
+        assert_parse::<Stmt>("JSRR R0");
+        // LD
+        assert_parse::<Stmt>("LD R0, #9");
+        assert_parse::<Stmt>("LD R1, LABEL");
+        // LDI
+        assert_parse::<Stmt>("LDI R2, #9");
+        assert_parse::<Stmt>("LDI R3, LABEL");
+        // LDR
+        assert_parse::<Stmt>("LDR R4, R5, #6");
+        // LEA
+        assert_parse::<Stmt>("LEA R6, #9");
+        assert_parse::<Stmt>("LEA R7, LABEL");
+        // NOT
+        assert_parse::<Stmt>("NOT R0, R1");
+        // RET
+        assert_parse::<Stmt>("RET");
+        // RTI
+        assert_parse::<Stmt>("RTI");
+        // ST
+        assert_parse::<Stmt>("ST R0, #9");
+        assert_parse::<Stmt>("ST R1, LABEL");
+        // STI
+        assert_parse::<Stmt>("STI R2, #9");
+        assert_parse::<Stmt>("STI R3, LABEL");
+        // STR
+        assert_parse::<Stmt>("STR R4, R5, #6");
+        // TRAP
+        assert_parse::<Stmt>("TRAP x26");
+        // NOP
+        assert_parse::<Stmt>("NOP");
+        assert_parse::<Stmt>("NOP LABEL");
+        assert_parse::<Stmt>("NOP #9");
+        // TRAP aliases
+        assert_parse::<Stmt>("GETC");
+        assert_parse::<Stmt>("OUT");
+        assert_parse::<Stmt>("PUTC");
+        assert_parse::<Stmt>("PUTS");
+        assert_parse::<Stmt>("IN");
+        assert_parse::<Stmt>("PUTSP");
+        assert_parse::<Stmt>("HALT");
+        // .orig
+        assert_parse::<Stmt>(".orig x3000");
+        // .fill
+        assert_parse::<Stmt>(".fill 64");
+        assert_parse::<Stmt>(".fill LABEL");
+        // .blkw
+        assert_parse::<Stmt>(".blkw 64");
+        // .stringz
+        assert_parse::<Stmt>(r#".stringz "Hello!""#);
+        // .end
+        assert_parse::<Stmt>(".end");
+        // .external
+        assert_parse::<Stmt>(".external LABEL");
+    }
+
+    #[test]
+    fn test_labeled_stmts() {
+        assert_parse::<Stmt>("LABEL1 LABEL2 LABEL3 NOT R0, R0");
+        assert_parse::<Stmt>("LABEL1 LABEL2 LABEL3 .fill 0");
+        assert_parse::<Stmt>("
+            LABEL1:
+            LABEL2:
+            LABEL3:
+                NOT R0, R0
+        ");
+        assert_parse::<Stmt>("
+            LABEL1:
+            LABEL2:
+            LABEL3:
+                .fill 0
+        ");
+    }
+
+    #[test]
+    fn test_wrong_punct() {
+        assert_parse::<Stmt>("LDR R4, R5, 0");
+        assert_parse_fail::<Stmt>("LDR R4 R5 0");
+        assert_parse_fail::<Stmt>("LDR R4: R5: 0");
+
+        assert_parse_fail::<Stmt>("A, LDR R4, R5, 0");
+    }
+
+    #[test]
+    fn test_instrs_directives_wrong_type() {
+        // Types:
+        // Numeric (signed/unsigned), label, register
+        // ADD
+        assert_parse_fail::<Stmt>("ADD A, B, C");
+        assert_parse_fail::<Stmt>("ADD R0, B, C");
+        assert_parse_fail::<Stmt>("ADD R0, R1, C");
+        // BR*
+        assert_parse_fail::<Stmt>("BR R0");
+        // JMP
+        assert_parse_fail::<Stmt>("JMP #1");
+        assert_parse_fail::<Stmt>("JMP FOO");
+        // JSR/JSRR
+        assert_parse_fail::<Stmt>("JSRR #11");
+        assert_parse_fail::<Stmt>("JSRR LABEL");
+        assert_parse_fail::<Stmt>("JSR R0");
+        // LD
+        assert_parse_fail::<Stmt>("LD R0, R1");
+        assert_parse_fail::<Stmt>("LDR FOO, BAR, BAZ");
+        assert_parse_fail::<Stmt>("LDR R4, BAR, BAZ");
+        assert_parse_fail::<Stmt>("LDR R4, R5, BAZ");
+        // NOT
+        assert_parse_fail::<Stmt>("NOT A0, B1");
+        assert_parse_fail::<Stmt>("NOT R0, B1");
+        // TRAP
+        assert_parse_fail::<Stmt>("TRAP -1");
+        assert_parse_fail::<Stmt>("TRAP FOO");
+        // NOP
+        assert_parse_fail::<Stmt>("NOP R0");
+        // .orig
+        assert_parse_fail::<Stmt>(".orig FOO");
+        assert_parse_fail::<Stmt>(".orig R0");
+        assert_parse_fail::<Stmt>(".orig -1");
+        // .fill
+        assert_parse_fail::<Stmt>(".fill R0");
+        // .blkw
+        assert_parse_fail::<Stmt>(".blkw FOO");
+        assert_parse_fail::<Stmt>(".blkw R0");
+        // .stringz
+        assert_parse_fail::<Stmt>(r".stringz FOO");
+        assert_parse_fail::<Stmt>(r".stringz R0");
+        assert_parse_fail::<Stmt>(r".stringz 0");
+        // .external
+        assert_parse_fail::<Stmt>(".external R0");
+        assert_parse_fail::<Stmt>(".external 0");
+    }
+
+    #[test]
+    fn test_instrs_directives_not_real() {
+        assert_parse_fail::<Stmt>("MULT");
+        assert_parse_fail::<Stmt>("XOR R0, R0, #0");
+        assert_parse_fail::<Stmt>(".not_a_directive");
+    }
+
+    #[test]
+    fn test_instrs_directives_limits() {
+        // imm5
+        assert_parse::<Stmt>("ADD R0, R1, #0");
+        assert_parse::<Stmt>("ADD R2, R3, #15");
+        assert_parse::<Stmt>("ADD R6, R7, #-16");
+        assert_parse_fail::<Stmt>("ADD R4, R5, #16");
+        assert_parse_fail::<Stmt>("ADD R0, R1, #-17");
+        
+        // offset6
+        assert_parse::<Stmt>("LDR R0, R1, #0");
+        assert_parse::<Stmt>("LDR R2, R3, #31");
+        assert_parse::<Stmt>("LDR R6, R7, #-32");
+        assert_parse_fail::<Stmt>("LDR R4, R5, #32");
+        assert_parse_fail::<Stmt>("LDR R0, R1, #-33");
+
+        // PCoffset9
+        assert_parse::<Stmt>("BR #0");
+        assert_parse::<Stmt>("BRp #255");
+        assert_parse::<Stmt>("BRzp #-256");
+        assert_parse_fail::<Stmt>("BRz #256");
+        assert_parse_fail::<Stmt>("BRn #-257");
+
+        // PCoffset11
+        assert_parse::<Stmt>("JSR #0");
+        assert_parse::<Stmt>("JSR #1023");
+        assert_parse::<Stmt>("JSR #-1024");
+        assert_parse_fail::<Stmt>("JSR #1024");
+        assert_parse_fail::<Stmt>("JSR #-1025");
+
+        // TrapVect8
+        assert_parse::<Stmt>("TRAP #0");
+        assert_parse::<Stmt>("TRAP #255");
+        assert_parse_fail::<Stmt>("TRAP #256");
+        assert_parse_fail::<Stmt>("TRAP #-1");
+
+        // unsigned 16-bit
+        assert_parse::<Stmt>(".orig #0");
+        assert_parse::<Stmt>(".orig #65535");
+        assert_parse_fail::<Stmt>(".orig #65536");
+        assert_parse_fail::<Stmt>(".orig #-1");
+
+        // .fill
+        // dual unsigned/signed 16-bit
+        assert_parse::<Stmt>(".fill #0");
+        assert_parse::<Stmt>(".fill #-1");
+        assert_parse::<Stmt>(".fill #65535");
+        assert_parse::<Stmt>(".fill #-32768");
+        assert_parse_fail::<Stmt>(".fill #65536");
+        assert_parse_fail::<Stmt>(".orig #-32769");
+
+        // .blkw
+        // non-zero unsigned 16-bit
+        assert_parse::<Stmt>(".blkw #1");
+        assert_parse::<Stmt>(".blkw #65535");
+        assert_parse_fail::<Stmt>(".blkw #0");
+        assert_parse_fail::<Stmt>(".blkw #-1");
+        assert_parse_fail::<Stmt>(".blkw #65536");
+    }
+}

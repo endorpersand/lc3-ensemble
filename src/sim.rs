@@ -318,7 +318,6 @@ pub enum SimErr {
     /// (including uninitialized registers).
     /// This also ignores loads from allocated (`.blkw`) memory in case the program writer
     /// uses those as register stores.
-
     // IDEA: So currently, the way this is implemented is that LDR Rx, R6, OFF is accepted regardless of initialization.
     // We could make this stricter by keeping track of how much is allocated on the stack.
     StrictRegSetUninit,
@@ -328,7 +327,6 @@ pub enum SimErr {
     /// (including uninitialized registers).
     /// This also ignores loads from allocated (`.blkw`) memory in case the program writer
     /// uses those as register stores.
-
     // IDEA: See StrictRegSetUninit.
     StrictMemSetUninit,
     /// Data was stored into MMIO with a partially uninitialized value.
