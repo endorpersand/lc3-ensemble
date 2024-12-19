@@ -1,6 +1,6 @@
 [package]
 name = "lc3-ensemble"
-rust-version="1.70"
+rust-version="1.80"
 version = "0.9.1"
 edition = "2021"
 license = "MIT"
@@ -12,6 +12,6 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-logos = "0.14.0"
+logos = "0.15.0"
 rand = "0.8.5"
 unescaper = "0.1.5"
