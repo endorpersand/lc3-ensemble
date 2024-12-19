@@ -295,7 +295,7 @@ impl ObjFileFormat for TextFormat {
         // 1    | 9091 | ......
         // ====================
         // ...
-        // // Support for comments, as well.
+        // # Support for comments, as well.
         // ```
         //
         // For a given `instruction in hex`, it prints the ASCII-hex encoding, returning ???? if uninitialized.
@@ -345,7 +345,7 @@ impl ObjFileFormat for TextFormat {
                 writeln!(buf)?;
 
                 writeln!(buf, ".DEBUG")?;
-                writeln!(buf, "// DEBUG SYMBOLS FOR LC3TOOLS")?;
+                writeln!(buf, "# DEBUG SYMBOLS FOR LC3TOOLS")?;
                 writeln!(buf)?;
 
                 // Display label to index mapping
@@ -441,10 +441,8 @@ impl ObjFileFormat for TextFormat {
 
         // Read all of the non-empty lines:
         let mut lines = string.trim().lines()
-            .map(|l| {
-                l.split_once("//").map_or(l, |(left, _)| left) // remove comments
-            })
-            .filter(|&l| !l.trim().is_empty());
+            .filter(|l| !l.starts_with('#')) // remove comment lines
+            .filter(|&l| !l.trim().is_empty()); // remove empty lines
         if lines.next() != Some(TFMT_MAGIC) { return None };
 
         let mut line_groups = vec![];
