@@ -322,11 +322,11 @@ impl ObjFileFormat for TextFormat {
             if let Some(sym) = &o.sym {
                 writeln!(buf, ".SYMBOL")?;
                 if !sym.label_map.is_empty() {
-                    let mut sym_entries: Vec<_> = sym.label_iter().collect();
-                    sym_entries.sort_by_key(|&(name, addr, ext)| (addr, name, ext));
+                    let mut entries: Vec<_> = sym.label_iter().collect();
+                    entries.sort_by_key(|&(name, addr, ext)| (addr, name, ext));
 
                     writeln!(buf, "ADDR{0}EXT{0}LABEL", TABLE_DIV)?;
-                    for (label, addr, external) in sym_entries {
+                    for (label, addr, external) in entries {
                         writeln!(buf, "{addr:04X}{0}{1:3}{0}{label}", TABLE_DIV, u8::from(external))?;
                     }
                 }
@@ -334,11 +334,11 @@ impl ObjFileFormat for TextFormat {
                 
                 writeln!(buf, ".LINKER_INFO")?;
                 if !sym.rel_map.is_empty() {
-                    let mut rel_entries: Vec<_> = sym.rel_map.iter().collect();
-                    rel_entries.sort_by_key(|&(&addr, label)| (addr, label));
+                    let mut entries: Vec<_> = sym.rel_map.iter().collect();
+                    entries.sort();
 
                     writeln!(buf, "ADDR{0}LABEL", TABLE_DIV)?;
-                    for (addr, label) in rel_entries {
+                    for (addr, label) in entries {
                         writeln!(buf, "{addr:04X}{0}{label}", TABLE_DIV)?;
                     }
                 }
@@ -353,9 +353,14 @@ impl ObjFileFormat for TextFormat {
                 const INDEX: &str = "INDEX";
                 
                 if !sym.label_map.is_empty() {
+                    let mut entries: Vec<_> = sym.label_map.iter()
+                        .map(|(label, sym_data)| (label, sym_data.src_start))
+                        .collect();
+                    entries.sort_by_key(|&(label, index)| (index, label));
+
                     // Calculate label & index column lengths
-                    let (label_col, index_col) = sym.label_map.iter()
-                        .map(|(s, sym_data)| (s.len(), count_digits(sym_data.src_start)))
+                    let (label_col, index_col) = entries.iter()
+                        .map(|&(label, index)| (label.len(), count_digits(index)))
                         .fold(
                             (LABEL.len(), INDEX.len()), 
                             |(lc, ic), (lx, ix)| (lc.max(lx), ic.max(ix))
@@ -363,8 +368,8 @@ impl ObjFileFormat for TextFormat {
 
                     // Display!
                     writeln!(buf, "{LABEL:1$}{0}{INDEX:2$}", TABLE_DIV, label_col, index_col)?;
-                    for (label, SymbolData { src_start, .. }) in sym.label_map.iter() {
-                        writeln!(buf, "{label:1$}{0}{src_start:2$}", TABLE_DIV, label_col, index_col)?;
+                    for (label, index) in entries {
+                        writeln!(buf, "{label:1$}{0}{index:2$}", TABLE_DIV, label_col, index_col)?;
                     }
                 }
                 writeln!(buf, "====================")?;
