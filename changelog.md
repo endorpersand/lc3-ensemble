@@ -1,3 +1,13 @@
+# 0.9.2 (December 18, 2024)
+
+- Bug fixes
+  - Lexer: Allow the lexer to recognize more invalid numeric types
+  - Lexer: Fix weird handling of `"` and escapes in string literals
+  - Object Files: Ban two overlapping object files from linking
+  - Object Files: Fix incorrect index when writing into object file during linking
+  - Object Files: Fix object files with "\r\n" not deserializing correctly on macOS
+  - Object Files: Small changes to text encoding (// -> # comments, reorder .DEBUG line table)
+
 # 0.9.1 (October 17, 2024)
 
 - Fix bug where overlapping blocks would not be detected during link if there was a matching block location in both files.
