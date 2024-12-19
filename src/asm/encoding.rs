@@ -412,7 +412,8 @@ impl ObjFileFormat for TextFormat {
                             // Line:
                             let src_line = src_info.raw_line_span(line)
                                 .and_then(|r| src_info.source().get(r))
-                                .unwrap_or("");
+                                .unwrap_or("")
+                                .escape_default();
                             write!(buf, "{src_line}")?;
     
                             writeln!(buf)?;
@@ -512,7 +513,7 @@ impl ObjFileFormat for TextFormat {
                         label_map.entry(label.to_string()).or_default().src_start = index;
                     }
 
-                    let mut line_table = parse_table(line_src, ["LINE", "ADDR", "SOURCE"], |cols, i| {
+                    let line_table = parse_table(line_src, ["LINE", "ADDR", "SOURCE"], |cols, i| {
                         let [rest @ .., source_str] = cols;
                         let [line_str, addr_str] = rest.map(str::trim);
                         
@@ -521,16 +522,13 @@ impl ObjFileFormat for TextFormat {
                         Some((m_addr, source_str))
                     }, false)?;
 
-                    if let Some((last_m_addr, last_line)) = line_table.pop() {
+                    if !line_table.is_empty() {
                         let (line_map, src) = debug_sym.get_or_insert_with(Default::default);
-
                         for (m_addr, line) in line_table {
                             line_map.push(m_addr);
-                            writeln!(src, "{line}").unwrap();
+                            src.write_str(line).unwrap();
                         }
-                        
-                        line_map.push(last_m_addr);
-                        write!(src, "{last_line}").unwrap();
+                        *src = unescaper::unescape(src).ok()?;
                     }
                 },
                 _ => return None

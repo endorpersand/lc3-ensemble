@@ -354,7 +354,8 @@ impl SourceInfo {
         self.nl_indices.len()
     }
 
-    /// Gets the character range for the provided line, including any whitespace.
+    /// Gets the character range for the provided line, including any whitespace
+    /// and the newline character.
     /// 
     /// This returns None if line is not in the interval `[0, number of lines)`.
     fn raw_line_span(&self, line: usize) -> Option<Range<usize>> {
@@ -364,12 +365,15 @@ impl SourceInfo {
             return None;
         };
 
-        let &end = self.nl_indices.get(line)
-            .unwrap_or_else(|| self.nl_indices.last().unwrap());
-        
-        let start = match line == 0 {
-            false => self.nl_indices[line - 1] + 1,
-            true  => 0,
+        let start = match line {
+            0 => 0,
+            _ => self.nl_indices[line - 1] + 1
+        };
+
+        let eof = self.src.len();
+        let end = match self.nl_indices.get(line) {
+            Some(i) => (i + 1).min(eof), // incl NL, but don't go over EOF
+            None => eof,
         };
         
         Some(start..end)
@@ -1534,37 +1538,36 @@ mod tests {
         assemble_src(src).unwrap_err();
     }
 
+    fn assert_obj_equal(deser: &mut ObjectFile, expected: &ObjectFile, m: &str) {
+        let deser_src = deser.sym.as_mut()
+            .and_then(|s| s.debug_symbols.as_mut())
+            .map(|s| &mut s.src_info.src)
+            .expect("deserialized object file has no source");
+
+        let expected_src = expected.sym.as_ref()
+            .and_then(|s| s.debug_symbols.as_ref())
+            .map(|s| &s.src_info.src)
+            .expect("expected object file has no source");
+
+        let deser_lines = deser_src.trim().lines().map(str::trim);
+        let expected_lines = expected_src.trim().lines().map(str::trim);
+        
+        assert!(deser_lines.eq(expected_lines), "lines should have matched");
+        
+        let mut buf = expected_src.to_string();
+        std::mem::swap(deser_src, &mut buf);
+        assert_eq!(deser, expected, "{m}");
+
+        // Revert change
+        let deser_src = deser.sym.as_mut()
+            .and_then(|s| s.debug_symbols.as_mut())
+            .map(|s| &mut s.src_info.src)
+            .expect("deserialized object file has no source");
+        std::mem::swap(deser_src, &mut buf);
+    }
+
     #[test]
     fn test_ser_deser() {
-        fn assert_obj_equal(deser: &mut ObjectFile, expected: &ObjectFile, m: &str) {
-            let deser_src = deser.sym.as_mut()
-                .and_then(|s| s.debug_symbols.as_mut())
-                .map(|s| &mut s.src_info.src)
-                .expect("deserialized object file has no source");
-
-            let expected_src = expected.sym.as_ref()
-                .and_then(|s| s.debug_symbols.as_ref())
-                .map(|s| &s.src_info.src)
-                .expect("expected object file has no source");
-
-            let deser_lines = deser_src.trim().lines().map(str::trim);
-            let expected_lines = expected_src.trim().lines().map(str::trim);
-            
-            assert!(deser_lines.eq(expected_lines), "lines should have matched");
-            
-            let mut buf = expected_src.to_string();
-            std::mem::swap(deser_src, &mut buf);
-            assert_eq!(deser, expected, "{m}");
-
-            // Revert change
-            let deser_src = deser.sym.as_mut()
-                .and_then(|s| s.debug_symbols.as_mut())
-                .map(|s| &mut s.src_info.src)
-                .expect("deserialized object file has no source");
-            std::mem::swap(deser_src, &mut buf);
-
-        }
-
         let src = "
             .orig x3000
                 AND R0, R0, #0
@@ -1582,6 +1585,27 @@ mod tests {
         let mut de = BinaryFormat::deserialize(&ser).expect("binary encoding should've been parseable");
         assert_obj_equal(&mut de, &obj, "binary encoding could not be roundtripped");
 
+        // Text format
+        let ser = TextFormat::serialize(&obj);
+        let mut de = TextFormat::deserialize(&ser).expect("text encoding should've been parseable");
+        assert_obj_equal(&mut de, &obj, "text encoding could not be roundtripped");
+    }
+    
+    #[test]
+    fn test_ser_deser_crlf() {
+        // With CRLF:
+        let src = "\r
+            .orig x3000\r
+                AND R0, R0, #0\r
+                ADD R0, R0, #15\r
+                MINUS_R0 NOT R1, R0\r
+                ADD R1, R1, #1\r
+                HALT\r
+            .end\r
+        ";
+
+        let obj = assemble_src(src).unwrap();
+        
         // Text format
         let ser = TextFormat::serialize(&obj);
         let mut de = TextFormat::deserialize(&ser).expect("text encoding should've been parseable");

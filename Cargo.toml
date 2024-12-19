@@ -14,3 +14,4 @@ readme = "README.md"
 [dependencies]
 logos = "0.14.0"
 rand = "0.8.5"
+unescaper = "0.1.5"
