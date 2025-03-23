@@ -79,7 +79,7 @@ impl TimerDevice {
 
         let generator = match seed {
             Some(s) => StdRng::seed_from_u64(s),
-            None => StdRng::from_entropy(),
+            None => StdRng::from_os_rng(),
         };
 
         let mut timer = Self {
@@ -120,8 +120,8 @@ impl TimerDevice {
     /// Generates a new random time.
     fn try_generate_time(&mut self) -> u32 {
         match self.range {
-            SampleRange { start, end, end_incl: true } => self.generator.gen_range(start..=end),
-            SampleRange { start, end, end_incl: false } => self.generator.gen_range(start..end),
+            SampleRange { start, end, end_incl: true } => self.generator.random_range(start..=end),
+            SampleRange { start, end, end_incl: false } => self.generator.random_range(start..end),
         }
     }
 }

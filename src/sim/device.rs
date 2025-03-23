@@ -453,7 +453,7 @@ impl<D: ExternalDevice> ExternalDevice for std::sync::Arc<std::sync::RwLock<D>> 
 
     fn io_write(&mut self, addr: u16, data: u16) -> bool {
         resolve_lock(self.try_write())
-            .map_or(false, |mut g| g.io_write(addr, data))
+            .is_some_and(|mut g| g.io_write(addr, data))
     }
 
     fn io_reset(&mut self) {
@@ -475,7 +475,7 @@ impl<D: ExternalDevice> ExternalDevice for std::sync::Arc<std::sync::Mutex<D>> {
 
     fn io_write(&mut self, addr: u16, data: u16) -> bool {
         resolve_lock(self.try_lock())
-            .map_or(false, |mut g| g.io_write(addr, data))
+            .is_some_and(|mut g| g.io_write(addr, data))
     }
 
     fn io_reset(&mut self) {
