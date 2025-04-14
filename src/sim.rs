@@ -516,6 +516,7 @@ impl Default for SimFlags {
 
 const USER_START: u16 = 0x3000;
 const IO_START: u16 = 0xFE00;
+const SAVED_USP_ADDR: u16 = 0xFFFA;
 const PSR_ADDR: u16 = 0xFFFC;
 const MCR_ADDR: u16 = 0xFFFE;
 
@@ -741,6 +742,7 @@ impl Simulator {
             // User range
             USER_START..IO_START => { /* Non-IO read */ },
             // IO range
+            SAVED_USP_ADDR => self.mem[addr].set(self.saved_sp.get()),
             PSR_ADDR => self.mem[addr].set(self.psr.get()),
             MCR_ADDR => self.mem[addr].set(u16::from(self.mcr.load(Ordering::Relaxed)) << 15),
             IO_START.. => {
@@ -777,6 +779,11 @@ impl Simulator {
             // User range (non-IO write)
             USER_START..IO_START => true,
             // IO range
+            SAVED_USP_ADDR => {
+                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
+                self.saved_sp.set(io_data);
+                true
+            },
             PSR_ADDR => {
                 let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
                 self.psr.set(io_data);
