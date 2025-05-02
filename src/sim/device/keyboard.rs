@@ -24,7 +24,7 @@ impl<K: KeyboardDevice> ExternalDevice for DevWrapper<K, dyn KeyboardDevice> {
     fn io_read(&mut self, addr: u16, effectful: bool) -> Option<u16> {
         match addr {
             KBSR => {
-                Some(u16::from(self.ready()) << 15 | u16::from(self.interrupts_enabled()) << 14)
+                Some((u16::from(self.ready()) << 15) | (u16::from(self.interrupts_enabled()) << 14))
             },
             KBDR if effectful => self.pop_input().map(u16::from),
             KBDR => self.get_input().map(u16::from),

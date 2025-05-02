@@ -329,7 +329,7 @@ impl WordFiller for StdRng {
     /// 
     /// This can be used to create deterministic, seeded values.
     fn generate(&mut self) -> u16 {
-        self.gen()
+        self.random()
     }
 }
 /// Strategy used to initialize the `reg_file` and `mem` of the [`Simulator`].
@@ -413,29 +413,8 @@ impl MemArray {
     pub(super) fn copy_obj_block(&mut self, mut start: u16, data: &[Option<u16>]) {
         let mem = &mut self.0;
 
-        // chunk_by was added in Rust 1.77
-        struct ChunkBy<'s, T, F>(&'s [T], F);
-        impl<'s, T, F: FnMut(&T, &T) -> bool> Iterator for ChunkBy<'s, T, F> {
-            type Item = &'s [T];
-        
-            fn next(&mut self) -> Option<Self::Item> {
-                let (first, rest) = self.0.split_first()?;
-
-                // find the first element that doesn't match pred (+1 for the first el that was removed)
-                let pos = match rest.iter().position(|n| !(self.1)(first, n)) {
-                    Some(i) => i + 1,
-                    None => self.0.len(),
-                };
-
-                let (chunk, rest) = self.0.split_at(pos);
-
-                self.0 = rest;
-                Some(chunk)
-            }
-        }
-
         // separate data into chunks of initialized/uninitialized
-        for chunk in ChunkBy(data, |a: &Option<_>, b: &Option<_>| a.is_some() == b.is_some()) {
+        for chunk in data.chunk_by(|a, b| a.is_some() == b.is_some()) {
             let end = start.wrapping_add(chunk.len() as u16);
 
             let si = usize::from(start);
