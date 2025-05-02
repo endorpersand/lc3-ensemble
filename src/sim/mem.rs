@@ -485,7 +485,7 @@ impl std::ops::IndexMut<u16> for MemArray {
 /// assert_eq!(reg[R0].get(), 11);
 /// ```
 #[derive(Debug, Clone)]
-pub struct RegFile([Word; 8]);
+pub struct RegFile([Word; Reg::REG_SIZE]);
 impl RegFile {
     /// Creates a register file with uninitialized data.
     pub fn new(filler: &mut impl WordFiller) -> Self {
