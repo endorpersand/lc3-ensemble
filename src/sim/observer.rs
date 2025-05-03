@@ -1,45 +1,100 @@
 //! A small module that tracks changes in memory,
 //! which can be used for whatever purposes necessary.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
-/// A struct that tracks changes in memory.
+/// The set of accesses which have occurred at this location.
+#[derive(Default, Clone, Copy)]
+pub struct AccessSet(u8);
+impl AccessSet {
+    /// Set with only the read flag enabled.
+    pub const READ: Self = Self(1 << 0);
+    /// Set with only the write flag enabled.
+    pub const WRITTEN: Self = Self(1 << 1);
+    /// Set with only the modify flag enabled.
+    pub const MODIFIED: Self = Self(1 << 2);
+
+    /// True if any access has occurred.
+    pub fn accessed(&self) -> bool {
+        self.0 != 0
+    }
+    
+    /// True if a read has occurred.
+    pub fn read(&self) -> bool {
+        self.0 & Self::READ.0 != 0
+    }
+    /// True if a write has occurred (does not necessarily have to change data).
+    pub fn written(&self) -> bool {
+        self.0 & Self::WRITTEN.0 != 0
+    }
+    /// True if a write has occurred (data must change).
+    pub fn modified(&self) -> bool {
+        self.0 & Self::MODIFIED.0 != 0
+    }
+}
+impl std::ops::BitOr for AccessSet {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+impl std::ops::BitOrAssign for AccessSet {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+impl std::fmt::Debug for AccessSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessFlags")
+            .field("accessed", &self.accessed())
+            .field("read", &self.read())
+            .field("written", &self.written())
+            .field("modified", &self.modified())
+            .finish()
+    }
+}
+
+/// A struct that tracks accesses in memory.
 #[derive(Debug)]
-pub struct ChangeObserver {
-    mem: BTreeSet<u16>
+pub struct AccessObserver {
+    mem: BTreeMap<u16, AccessSet>
     // Maybe add reg, PC, PSR, MCR support here?
     //
     // Memory can be easily tracked through the write_mem method,
     // but reg/PC/PSR/MCR aren't exactly encapsulated in this way.
 }
-impl ChangeObserver {
+impl AccessObserver {
     pub fn new() -> Self {
         Self {
-            mem: BTreeSet::new()
+            mem: Default::default()
         }
     }
 
-    /// Clears all changes.
+    /// Clears all accesses.
     pub fn clear(&mut self) {
         std::mem::take(self);
     }
-    /// Sets the memory changed state at the given address to true.
-    pub fn set_mem_changed(&mut self, addr: u16) {
-        self.mem.insert(addr);
+
+    /// Gets the access set for the given memory location.
+    pub fn get_mem_accesses(&self, addr: u16) -> AccessSet {
+        self.mem.get(&addr).copied().unwrap_or_default()
     }
-    /// Gets the memory changed state at the given address.
-    pub fn mem_changed(&mut self, addr: u16) -> bool {
-        self.mem.contains(&addr)
+
+    /// Adds new flags to the access set for the given memory location.
+    pub fn update_mem_accesses(&mut self, addr: u16, set: AccessSet) {
+        *self.mem.entry(addr).or_default() |= set;
     }
-    /// Takes the memory changes that happened since last clear,
-    ///  as well as clearing the memory.
+    
+    /// Takes all memory accesses which have occurred since last clear,
+    /// as well as clearing memory accesses.
     /// 
     /// This iterator is sorted in address order.
-    pub fn take_mem_changes(&mut self) -> impl Iterator<Item=u16> {
+    pub fn take_mem_accesses(&mut self) -> impl Iterator<Item=(u16, AccessSet)> {
         std::mem::take(&mut self.mem).into_iter()
     }
 }
-impl Default for ChangeObserver {
+impl Default for AccessObserver {
     fn default() -> Self {
         Self::new()
     }

@@ -292,6 +292,7 @@ use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 use debug::Breakpoint;
 use device::{DeviceHandler, ExternalDevice, ExternalInterrupt};
+use observer::AccessSet;
 
 use self::frame::{FrameStack, FrameType};
 use self::mem::{MemArray, RegFile, Word, MachineInitStrategy};
@@ -605,7 +606,7 @@ pub struct Simulator {
     pause_condition: PauseCondition,
 
     /// Tracks changes in simulator state.
-    pub observer: observer::ChangeObserver,
+    pub observer: observer::AccessObserver,
 
     /// Indicates whether the OS has been loaded.
     os_loaded: bool,
@@ -750,6 +751,8 @@ impl Simulator {
             }
         }
 
+        // Update memory observer:
+        self.observer.update_mem_accesses(addr, AccessSet::READ);
         // Load from mem array:
         Ok(self.mem[addr])
     }
@@ -795,9 +798,12 @@ impl Simulator {
 
         // Duplicate write in mem array:
         if success {
+            // Update memory observer:
+            self.observer.update_mem_accesses(addr, AccessSet::WRITTEN);
             if self.mem[addr] != data {
-                self.observer.set_mem_changed(addr);
+                self.observer.update_mem_accesses(addr, AccessSet::MODIFIED);
             }
+
             self.mem[addr]
                 .set_if_init(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
