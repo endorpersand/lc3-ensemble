@@ -280,7 +280,7 @@ pub mod mem;
 pub mod debug;
 pub mod frame;
 pub mod device;
-mod observer;
+pub mod observer;
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;

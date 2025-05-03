@@ -1,9 +1,29 @@
-//! A small module that tracks changes in memory,
-//! which can be used for whatever purposes necessary.
+//! Module handles memory access observers,
+//! which store which accesses occur at a given memory location.
+//! 
+//! You would typically access an observer via the [`Simulator::observer`] field.
+//! This [`AccessObserver`] can be used to read or update accesses via its [`get_mem_accesses`]
+//! and [`update_mem_accesses`] methods.
+//! 
+//! [`Simulator::observer`]: crate::sim::Simulator::observer
+//! [`get_mem_accesses`]: AccessObserver::get_mem_accesses
+//! [`update_mem_accesses`]: AccessObserver::update_mem_accesses
 
 use std::collections::BTreeMap;
 
 /// The set of accesses which have occurred at this location.
+/// 
+/// ## Example
+/// 
+/// ```
+/// # use lc3_ensemble::sim::observer::AccessSet;
+/// 
+/// let accesses = AccessSet::READ;
+/// assert!(accesses.accessed());
+/// assert!(accesses.read());
+/// assert!(!accesses.written());
+/// assert!(!accesses.modified());
+/// ```
 #[derive(Default, Clone, Copy)]
 pub struct AccessSet(u8);
 impl AccessSet {
@@ -65,6 +85,7 @@ pub struct AccessObserver {
     // but reg/PC/PSR/MCR aren't exactly encapsulated in this way.
 }
 impl AccessObserver {
+    /// Creates a new access observer.
     pub fn new() -> Self {
         Self {
             mem: Default::default()
