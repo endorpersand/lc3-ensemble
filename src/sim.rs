@@ -540,14 +540,22 @@ pub struct MemAccessCtx {
     /// This can be set to false to observe the value of IO.
     /// 
     /// This does not affect [`Simulator::write_mem`].
-    pub io_effects: bool
+    pub io_effects: bool,
+
+    /// Whether an access should be tracked in the Simulator's [`observer::AccessObserver`].
+    /// 
+    /// This typically should be disabled if some sort of system (e.g., autograder or program setup)
+    /// is reading/writing and enabled during program execution.
+    pub track_access: bool
 }
 impl MemAccessCtx {
-    /// Allows any access and allows access to (effectless) IO.
+    /// Allows accessing memory and (effectless) IO
+    /// without causing any IO updates or access observer updates.
     /// 
-    /// Useful for reading state.
+    /// Useful for accessing memory + IO states.
     pub fn omnipotent() -> Self {
-        MemAccessCtx { privileged: true, strict: false, io_effects: false }
+        MemAccessCtx {
+            privileged: true, strict: false, io_effects: false, track_access: false }
     }
 }
 /// Executes assembled code.
@@ -605,7 +613,11 @@ pub struct Simulator {
     /// had paused.
     pause_condition: PauseCondition,
 
-    /// Tracks changes in simulator state.
+    /// Tracks accesses to simulator memory.
+    /// 
+    /// An access is defined as a read from or write to a memory location,
+    /// which includes reading a memory location in order to decode it
+    /// or to obtain an address for indirect accesses.
     pub observer: observer::AccessObserver,
 
     /// Indicates whether the OS has been loaded.
@@ -751,8 +763,10 @@ impl Simulator {
             }
         }
 
-        // Update memory observer:
-        self.observer.update_mem_accesses(addr, AccessSet::READ);
+        if ctx.track_access {
+            // Update memory observer:
+            self.observer.update_mem_accesses(addr, AccessSet::READ);
+        }
         // Load from mem array:
         Ok(self.mem[addr])
     }
@@ -798,10 +812,12 @@ impl Simulator {
 
         // Duplicate write in mem array:
         if success {
-            // Update memory observer:
-            self.observer.update_mem_accesses(addr, AccessSet::WRITTEN);
-            if self.mem[addr] != data {
-                self.observer.update_mem_accesses(addr, AccessSet::MODIFIED);
+            if ctx.track_access {
+                // Update memory observer:
+                self.observer.update_mem_accesses(addr, AccessSet::WRITTEN);
+                if self.mem[addr] != data {
+                    self.observer.update_mem_accesses(addr, AccessSet::MODIFIED);
+                }
             }
 
             self.mem[addr]
@@ -940,7 +956,8 @@ impl Simulator {
         MemAccessCtx {
             privileged: self.psr.privileged() || self.flags.ignore_privilege,
             strict: self.flags.strict,
-            io_effects: true
+            io_effects: true,
+            track_access: true
         }
     }
 
