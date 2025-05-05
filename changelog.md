@@ -1,3 +1,13 @@
+# 0.10.0 (May 5, 2025)
+
+- Access Observer
+  - (Breaking) Replaced the previous `ChangeObserver` API into the `AccessObserver` API. This API allows for checking whether a memory location was accessed (expanding the previous functionality of checking whether a memory location was "changed")
+  - Exposed the `observer` module (which was incorrectly hidden, oops)
+  - Added `SimFlags::track_access` to allow individual reads or writes from being tracked in `AccessObserver`.
+- Internal Register/`mmap_internal` API
+  - API to expose internal registers (PC and SavedSP) as MMIO
+  - Added `Simulator::mmap_internal` and `Simulator::munmap_internal` to facilitate this functionality
+
 # 0.9.2 (December 18, 2024)
 
 - Bug fixes
