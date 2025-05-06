@@ -50,6 +50,9 @@ pub enum Reg {
     R7 = 7
 }
 impl Reg {
+    /// The number of registers defined by the LC-3 ISA.
+    pub(crate) const REG_SIZE: usize = 8;
+
     /// Gets the register number of this [`Reg`]. This is always between 0 and 7.
     pub fn reg_no(self) -> u8 {
         self as u8
