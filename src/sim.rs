@@ -282,7 +282,7 @@ pub mod frame;
 pub mod device;
 pub mod observer;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -520,6 +520,71 @@ const IO_START: u16 = 0xFE00;
 const PSR_ADDR: u16 = 0xFFFC;
 const MCR_ADDR: u16 = 0xFFFE;
 
+/// A register which stores internal state in [`Simulator`].
+/// 
+/// An internal register can be memory-mapped using [`Simulator::mmap_internal`]
+/// and unmapped using [`Simulator::munmap_internal`].
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum InternalRegister {
+    /// The program counter.
+    PC,
+    /// The processor status register.
+    PSR,
+    /// Machine control register.
+    MCR,
+    /// Saved stack pointer (USP in kernel, SSP in user).
+    SavedSP,
+}
+impl InternalRegister {
+    fn default_mmap() -> HashMap<u16, Self> {
+        HashMap::from_iter([
+            (PSR_ADDR, Self::PSR),
+            (MCR_ADDR, Self::MCR),
+        ])
+    }
+
+    /// Reads from an internal register.
+    fn read(self, sim: &mut Simulator) -> u16 {
+        use std::sync::atomic::Ordering;
+
+        match self {
+            InternalRegister::PC => sim.pc,
+            InternalRegister::PSR => sim.psr.get(),
+            InternalRegister::MCR => u16::from(sim.mcr.load(Ordering::Relaxed)) << 15,
+            InternalRegister::SavedSP => sim.saved_sp.get(),
+        }
+    }
+    /// Writes to an internal register.
+    fn write(self, sim: &mut Simulator, data: u16) {
+        use std::sync::atomic::Ordering;
+
+        match self {
+            InternalRegister::PC => sim.pc = data,
+            InternalRegister::PSR => sim.psr.set(data),
+            InternalRegister::MCR => sim.mcr.store((data as i16) < 0, Ordering::Relaxed),
+            InternalRegister::SavedSP => sim.saved_sp.set(data)
+        }
+    }
+}
+
+/// Error in [`Simulator::mmap_internal`].
+#[derive(Debug)]
+pub enum MMapInternalErr {
+    /// Address specified is not in IO range.
+    NotInIORange,
+    /// Address specified is already mapped to another internal register or device.
+    AddrAlreadyMapped
+}
+impl std::fmt::Display for MMapInternalErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MMapInternalErr::NotInIORange => f.write_str("address not in IO range"),
+            MMapInternalErr::AddrAlreadyMapped => f.write_str("address already mapped"),
+        }
+    }
+}
+impl std::error::Error for MMapInternalErr {}
+
 /// Context behind a memory access.
 /// 
 /// This struct is used by [`Simulator::read_mem`] and [`Simulator::write_mem`] to perform checks against memory accesses.
@@ -643,6 +708,8 @@ pub struct Simulator {
     /// Breakpoints for the simulator.
     pub breakpoints: HashSet<Breakpoint>,
 
+    // Any addresses memory-mapped to internal registers (e.g., PSR, MCR).
+    ireg_mmap: HashMap<u16, InternalRegister>,
     /// All external devices connected to the system (IO and interrupting devices).
     pub device_handler: DeviceHandler
 
@@ -674,6 +741,7 @@ impl Simulator {
             mcr,
             flags,
             breakpoints: Default::default(),
+            ireg_mmap: InternalRegister::default_mmap(),
             device_handler: Default::default()
         };
 
@@ -723,10 +791,12 @@ impl Simulator {
         let mcr = Arc::clone(&self.mcr);
         let flags = self.flags;
         let breakpoints = std::mem::take(&mut self.breakpoints);
+        let ireg_map = std::mem::take(&mut self.ireg_mmap);
         let dev_handler = std::mem::take(&mut self.device_handler);
 
         *self = Simulator::new_with_mcr(flags, mcr);
         self.breakpoints = breakpoints;
+        self.ireg_mmap = ireg_map;
         self.device_handler = dev_handler;
         self.device_handler.io_reset();
     }
@@ -743,8 +813,6 @@ impl Simulator {
     /// Note that this method is used for simulating a read to memory-mapped IO. 
     /// If you would like to query the memory's state, consider using `index` on [`MemArray`].
     pub fn read_mem(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
-        use std::sync::atomic::Ordering;
-
         if !ctx.privileged && !(USER_START..IO_START).contains(&addr) { return Err(SimErr::AccessViolation) };
 
         // Apply read to IO and write to mem array:
@@ -754,10 +822,11 @@ impl Simulator {
             // User range
             USER_START..IO_START => { /* Non-IO read */ },
             // IO range
-            PSR_ADDR => self.mem[addr].set(self.psr.get()),
-            MCR_ADDR => self.mem[addr].set(u16::from(self.mcr.load(Ordering::Relaxed)) << 15),
             IO_START.. => {
-                if let Some(data) = self.device_handler.io_read(addr, ctx.io_effects) {
+                if let Some(ireg) = self.ireg_mmap.get(&addr) {
+                    let data = ireg.read(self);
+                    self.mem[addr].set(data);
+                } else if let Some(data) = self.device_handler.io_read(addr, ctx.io_effects) {
                     self.mem[addr].set(data);
                 }
             }
@@ -783,8 +852,6 @@ impl Simulator {
     /// Note that this method is used for simulating a write to memory-mapped IO. 
     /// If you would like to edit the memory's state, consider using `index_mut` on [`MemArray`].
     pub fn write_mem(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
-        use std::sync::atomic::Ordering;
-
         if !ctx.privileged && !(USER_START..IO_START).contains(&addr) { return Err(SimErr::AccessViolation) };
         
         // Apply write to IO:
@@ -794,19 +861,16 @@ impl Simulator {
             // User range (non-IO write)
             USER_START..IO_START => true,
             // IO range
-            PSR_ADDR => {
-                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
-                self.psr.set(io_data);
-                true
-            },
-            MCR_ADDR => {
-                let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
-                self.mcr.store((io_data as i16) < 0, Ordering::Relaxed);
-                true
-            },
             IO_START.. => {
                 let io_data = data.get_if_init(ctx.strict, SimErr::StrictIOSetUninit)?;
-                self.device_handler.io_write(addr, io_data)
+
+                match self.ireg_mmap.get(&addr) {
+                    Some(ir) => {
+                        ir.write(self, io_data);
+                        true
+                    },
+                    None => self.device_handler.io_write(addr, io_data),
+                }
             }
         };
 
@@ -825,6 +889,63 @@ impl Simulator {
         }
 
         Ok(())
+    }
+
+    /// Exposes an internal register to memory-mapped IO.
+    /// 
+    /// The effect of this is that if the assigned IO address is accessed (loaded or stored),
+    /// the internal register is accessed instead.
+    /// 
+    /// Returns an [`MMapInternalErr`] if unsuccessful.
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// use lc3_ensemble::sim::Simulator;
+    /// use lc3_ensemble::sim::SimFlags;
+    /// use lc3_ensemble::sim::InternalRegister;
+    /// use lc3_ensemble::sim::mem::Word;
+    /// # use lc3_ensemble::err::SimErr;
+    /// 
+    /// # fn main() -> Result<(), SimErr> {
+    /// let mut sim = Simulator::new(SimFlags { ignore_privilege: true, ..Default::default() });
+    /// sim.mmap_internal(0xFE05, InternalRegister::PC);
+    /// 
+    /// // Read from PC:
+    /// assert_eq!(sim.read_mem(0xFE05, sim.default_mem_ctx())?.get(), 0x3000);
+    /// // Write to PC:
+    /// sim.write_mem(0xFE05, Word::new_init(0x3939), sim.default_mem_ctx())?;
+    /// assert_eq!(sim.pc, 0x3939);
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// 
+    pub fn mmap_internal(&mut self, addr: u16, reg: InternalRegister) -> Result<(), MMapInternalErr> {
+        use std::collections::hash_map::Entry;
+
+        if !(IO_START..).contains(&addr) { return Err(MMapInternalErr::NotInIORange); }
+        // Note: Since `mmap_internal` is disconnected from `device_handler`,
+        // this doesn't properly handle the case when a port is mapped onto `device_handler`
+        // and `mmap_internal` at the same time.
+        //
+        // Solution to this could be merging internal registers + device handler.
+        let Entry::Vacant(e) = self.ireg_mmap.entry(addr) else {
+            return Err(MMapInternalErr::AddrAlreadyMapped);
+        };
+
+        e.insert(reg);
+        Ok(())
+    }
+
+    /// Removes an internal register from memory-mapped IO
+    /// which was previously exposed by [`Simulator::mmap_internal`].
+    /// 
+    /// Note that this only updates internal registers. 
+    /// Any external devices need to be removed with [`DeviceHandler`] instead.
+    /// 
+    /// This returns whether a register was successfully removed.
+    pub fn munmap_internal(&mut self, addr: u16) -> bool {
+        self.ireg_mmap.remove(&addr).is_some()
     }
 
     /// Loads an object file into this simulator.
